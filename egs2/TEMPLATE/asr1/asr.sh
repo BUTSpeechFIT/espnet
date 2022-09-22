@@ -36,6 +36,7 @@ nj=32                # The number of parallel jobs.
 inference_nj=32      # The number of parallel jobs in decoding.
 gpu_inference=false  # Whether to perform gpu decoding.
 dumpdir=dump         # Directory to dump features.
+datadir=data
 expdir=exp           # Directory to save experiments.
 python=python3       # Specify python to execute espnet commands.
 
@@ -161,6 +162,7 @@ Options:
     --nj             # The number of parallel jobs (default="${nj}").
     --inference_nj   # The number of parallel jobs in decoding (default="${inference_nj}").
     --gpu_inference  # Whether to perform gpu decoding (default="${gpu_inference}").
+    --datadir        # Directory where the data for train/dev/test is present (default="${datadir}").
     --dumpdir        # Directory to dump features (default="${dumpdir}").
     --expdir         # Directory to save experiments (default="${expdir}").
     --python         # Specify python to execute espnet commands (default="${python}").
@@ -295,9 +297,9 @@ fi
 
 # Check tokenization type
 if [ "${lang}" != noinfo ]; then
-    token_listdir=data/${lang}_token_list
+    token_listdir=${datadir}/${lang}_token_list
 else
-    token_listdir=data/token_list
+    token_listdir=${datadir}/token_list
 fi
 bpedir="${token_listdir}/bpe_${bpemode}${nbpe}"
 bpeprefix="${bpedir}"/bpe
@@ -440,24 +442,24 @@ fi
 
 if ! "${skip_data_prep}"; then
     if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
-        log "Stage 1: Data preparation for data/${train_set}, data/${valid_set}, etc."
+        log "Stage 1: Data preparation for ${datadir}/${train_set}, ${datadir}/${valid_set}, etc."
         # [Task dependent] Need to create data.sh for new corpus
         local/data.sh ${local_data_opts}
     fi
 
     if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
         if [ -n "${speed_perturb_factors}" ]; then
-           log "Stage 2: Speed perturbation: data/${train_set} -> data/${train_set}_sp"
+           log "Stage 2: Speed perturbation: ${datadir}/${train_set} -> ${datadir}/${train_set}_sp"
            for factor in ${speed_perturb_factors}; do
                if [[ $(bc <<<"${factor} != 1.0") == 1 ]]; then
-                   scripts/utils/perturb_data_dir_speed.sh "${factor}" "data/${train_set}" "data/${train_set}_sp${factor}"
-                   _dirs+="data/${train_set}_sp${factor} "
+                   scripts/utils/perturb_data_dir_speed.sh "${factor}" "${datadir}/${train_set}" "${datadir}/${train_set}_sp${factor}"
+                   _dirs+="${datadir}/${train_set}_sp${factor} "
                else
                    # If speed factor is 1, same as the original
-                   _dirs+="data/${train_set} "
+                   _dirs+="${datadir}/${train_set} "
                fi
            done
-           utils/combine_data.sh "data/${train_set}_sp" ${_dirs}
+           utils/combine_data.sh "${datadir}/${train_set}_sp" ${_dirs}
         else
            log "Skip stage 2: Speed perturbation"
         fi
@@ -469,7 +471,7 @@ if ! "${skip_data_prep}"; then
 
     if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
         if [ "${feats_type}" = raw ]; then
-            log "Stage 3: Format wav.scp: data/ -> ${data_feats}"
+            log "Stage 3: Format wav.scp: ${datadir}/ -> ${data_feats}"
 
             # ====== Recreating "wav.scp" ======
             # Kaldi-wav.scp, which can describe the file path with unix-pipe, like "cat /some/path |",
@@ -485,27 +487,27 @@ if ! "${skip_data_prep}"; then
                 else
                     _suf=""
                 fi
-                utils/copy_data_dir.sh --validate_opts --non-print data/"${dset}" "${data_feats}${_suf}/${dset}"
+                utils/copy_data_dir.sh --validate_opts --non-print ${datadir}/"${dset}" "${data_feats}${_suf}/${dset}"
                 rm -f ${data_feats}${_suf}/${dset}/{segments,wav.scp,reco2file_and_channel,reco2dur}
                 _opts=
-                if [ -e data/"${dset}"/segments ]; then
+                if [ -e ${datadir}/"${dset}"/segments ]; then
                     # "segments" is used for splitting wav files which are written in "wav".scp
                     # into utterances. The file format of segments:
                     #   <segment_id> <record_id> <start_time> <end_time>
                     #   "e.g. call-861225-A-0050-0065 call-861225-A 5.0 6.5"
                     # Where the time is written in seconds.
-                    _opts+="--segments data/${dset}/segments "
+                    _opts+="--segments ${datadir}/${dset}/segments "
                 fi
                 # shellcheck disable=SC2086
                 scripts/audio/format_wav_scp.sh --nj "${nj}" --cmd "${train_cmd}" \
                     --audio-format "${audio_format}" --fs "${fs}" ${_opts} \
-                    "data/${dset}/wav.scp" "${data_feats}${_suf}/${dset}"
+                    "${datadir}/${dset}/wav.scp" "${data_feats}${_suf}/${dset}"
 
                 echo "${feats_type}" > "${data_feats}${_suf}/${dset}/feats_type"
             done
 
         elif [ "${feats_type}" = fbank_pitch ]; then
-            log "[Require Kaldi] Stage 3: ${feats_type} extract: data/ -> ${data_feats}"
+            log "[Require Kaldi] Stage 3: ${feats_type} extract: ${datadir}/ -> ${data_feats}"
 
             for dset in "${train_set}" "${valid_set}" ${test_sets}; do
                 if [ "${dset}" = "${train_set}" ] || [ "${dset}" = "${valid_set}" ]; then
@@ -514,7 +516,7 @@ if ! "${skip_data_prep}"; then
                     _suf=""
                 fi
                 # 1. Copy datadir
-                utils/copy_data_dir.sh --validate_opts --non-print data/"${dset}" "${data_feats}${_suf}/${dset}"
+                utils/copy_data_dir.sh --validate_opts --non-print ${datadir}/"${dset}" "${data_feats}${_suf}/${dset}"
 
                 # 2. Feature extract
                 _nj=$(min "${nj}" "$(<"${data_feats}${_suf}/${dset}/utt2spk" wc -l)")
@@ -534,12 +536,12 @@ if ! "${skip_data_prep}"; then
             done
 
         elif [ "${feats_type}" = fbank ]; then
-            log "Stage 3: ${feats_type} extract: data/ -> ${data_feats}"
+            log "Stage 3: ${feats_type} extract: ${datadir}/ -> ${data_feats}"
             log "${feats_type} is not supported yet."
             exit 1
 
         elif  [ "${feats_type}" = extracted ]; then
-            log "Stage 3: ${feats_type} extract: data/ -> ${data_feats}"
+            log "Stage 3: ${feats_type} extract: ${datadir}/ -> ${data_feats}"
             # Assumming you don't have wav.scp, but feats.scp is created by local/data.sh instead.
 
             for dset in "${train_set}" "${valid_set}" ${test_sets}; do
@@ -549,8 +551,8 @@ if ! "${skip_data_prep}"; then
                     _suf=""
                 fi
                 # Generate dummy wav.scp to avoid error by copy_data_dir.sh
-                <data/"${dset}"/cmvn.scp awk ' { print($1,"<DUMMY>") }' > data/"${dset}"/wav.scp
-                utils/copy_data_dir.sh --validate_opts --non-print data/"${dset}" "${data_feats}${_suf}/${dset}"
+                <${datadir}/"${dset}"/cmvn.scp awk ' { print($1,"<DUMMY>") }' > ${datadir}/"${dset}"/wav.scp
+                utils/copy_data_dir.sh --validate_opts --non-print ${datadir}/"${dset}" "${data_feats}${_suf}/${dset}"
 
                 # Derive the the frame length and feature dimension
                 _nj=$(min "${nj}" "$(<"${data_feats}${_suf}/${dset}/utt2spk" wc -l)")
