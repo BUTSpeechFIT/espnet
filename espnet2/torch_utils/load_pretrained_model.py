@@ -58,6 +58,7 @@ def load_pretrained_model(
         ... )
         >>> load_pretrained_model("somewhere/decoder.pth::decoder", model)
     """
+    logger = logging.getLogger()
     sps = init_param.split(":", 4)
     if len(sps) == 4:
         path, src_key, dst_key, excludes = sps
@@ -113,5 +114,6 @@ def load_pretrained_model(
     dst_state = obj.state_dict()
     if ignore_init_mismatch:
         src_state = filter_state_dict(dst_state, src_state)
+    logger.info("Loaded {:d} modules".format(len(src_state)))
     dst_state.update(src_state)
     obj.load_state_dict(dst_state)
