@@ -1,22 +1,19 @@
 """Abstract task module."""
-from abc import ABC
-from abc import abstractmethod
 import argparse
-from dataclasses import dataclass
-from distutils.version import LooseVersion
 import functools
 import logging
 import os
-from pathlib import Path
 import sys
-from typing import Any
-from typing import Callable
-from typing import Dict
-from typing import List
-from typing import Optional
-from typing import Sequence
-from typing import Tuple
-from typing import Union
+from glob import glob
+import shutil
+import random
+import string
+from time import time
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from pathlib import Path, PurePath
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import humanfriendly
 import numpy as np
@@ -24,21 +21,19 @@ import torch
 import torch.multiprocessing
 import torch.nn
 import torch.optim
-from torch.utils.data import DataLoader
-from typeguard import check_argument_types
-from typeguard import check_return_type
 import yaml
+from packaging.version import parse as V
+from torch.utils.data import DataLoader
+from typeguard import check_argument_types, check_return_type
 
 from espnet import __version__
-from espnet.utils.cli_utils import get_commandline_args
 from espnet2.iterators.abs_iter_factory import AbsIterFactory
 from espnet2.iterators.chunk_iter_factory import ChunkIterFactory
 from espnet2.iterators.multiple_iter_factory import MultipleIterFactory
 from espnet2.iterators.sequence_iter_factory import SequenceIterFactory
 from espnet2.main_funcs.collect_stats import collect_stats
 from espnet2.optimizers.sgd import SGD
-from espnet2.samplers.build_batch_sampler import BATCH_TYPES
-from espnet2.samplers.build_batch_sampler import build_batch_sampler
+from espnet2.samplers.build_batch_sampler import BATCH_TYPES, build_batch_sampler
 from espnet2.samplers.unsorted_batch_sampler import UnsortedBatchSampler
 from espnet2.schedulers.noam_lr import NoamLR
 from espnet2.schedulers.warmup_lr import WarmupLR
@@ -48,35 +43,39 @@ from espnet2.torch_utils.pytorch_version import pytorch_cudnn_version
 from espnet2.torch_utils.set_all_random_seed import set_all_random_seed
 from espnet2.train.abs_espnet_model import AbsESPnetModel
 from espnet2.train.class_choices import ClassChoices
-from espnet2.train.dataset import AbsDataset
-from espnet2.train.dataset import DATA_TYPES
-from espnet2.train.dataset import ESPnetDataset
-from espnet2.train.distributed_utils import DistributedOption
-from espnet2.train.distributed_utils import free_port
-from espnet2.train.distributed_utils import get_master_port
-from espnet2.train.distributed_utils import get_node_rank
-from espnet2.train.distributed_utils import get_num_nodes
-from espnet2.train.distributed_utils import resolve_distributed_mode
+from espnet2.train.dataset import DATA_TYPES, AbsDataset, ESPnetDataset
+from espnet2.train.distributed_utils import (
+    DistributedOption,
+    free_port,
+    get_master_port,
+    get_node_rank,
+    get_num_nodes,
+    resolve_distributed_mode,
+)
 from espnet2.train.iterable_dataset import IterableESPnetDataset
 from espnet2.train.trainer import Trainer
-from espnet2.utils.build_dataclass import build_dataclass
 from espnet2.utils import config_argparse
+from espnet2.utils.build_dataclass import build_dataclass
 from espnet2.utils.get_default_kwargs import get_default_kwargs
 from espnet2.utils.nested_dict_action import NestedDictAction
-from espnet2.utils.types import humanfriendly_parse_size_or_none
-from espnet2.utils.types import int_or_none
-from espnet2.utils.types import str2bool
-from espnet2.utils.types import str2triple_str
-from espnet2.utils.types import str_or_int
-from espnet2.utils.types import str_or_none
+from espnet2.utils.types import (
+    humanfriendly_parse_size_or_none,
+    int_or_none,
+    str2bool,
+    str2triple_str,
+    str_or_int,
+    str_or_none,
+)
 from espnet2.utils.yaml_no_alias_safe_dump import yaml_no_alias_safe_dump
+from espnet.utils.cli_utils import get_commandline_args
+from espnet2.fileio.read_text import read_2column_text
 
 try:
     import wandb
 except Exception:
     wandb = None
 
-if LooseVersion(torch.__version__) >= LooseVersion("1.5.0"):
+if V(torch.__version__) >= V("1.5.0"):
     from torch.multiprocessing.spawn import ProcessContext
 else:
     from torch.multiprocessing.spawn import SpawnContext as ProcessContext
@@ -94,11 +93,9 @@ optim_classes = dict(
     rmsprop=torch.optim.RMSprop,
     rprop=torch.optim.Rprop,
 )
-if LooseVersion(torch.__version__) >= LooseVersion("1.10.0"):
+if V(torch.__version__) >= V("1.10.0"):
     # From 1.10.0, RAdam is officially supported
-    optim_classes.update(
-        radam=torch.optim.RAdam,
-    )
+    optim_classes.update(radam=torch.optim.RAdam,)
 try:
     import torch_optimizer
 
@@ -116,11 +113,9 @@ try:
         sgdw=torch_optimizer.SGDW,
         yogi=torch_optimizer.Yogi,
     )
-    if LooseVersion(torch_optimizer.__version__) < LooseVersion("0.2.0"):
+    if V(torch_optimizer.__version__) < V("0.2.0"):
         # From 0.2.0, RAdam is dropped
-        optim_classes.update(
-            radam=torch_optimizer.RAdam,
-        )
+        optim_classes.update(radam=torch_optimizer.RAdam,)
     del torch_optimizer
 except ImportError:
     pass
@@ -267,8 +262,7 @@ class AbsTask(ABC):
         assert check_argument_types()
 
         class ArgumentDefaultsRawTextHelpFormatter(
-            argparse.RawTextHelpFormatter,
-            argparse.ArgumentDefaultsHelpFormatter,
+            argparse.RawTextHelpFormatter, argparse.ArgumentDefaultsHelpFormatter,
         ):
             pass
 
@@ -286,6 +280,21 @@ class AbsTask(ABC):
 
         group = parser.add_argument_group("Common configuration")
 
+        group.add_argument(
+            "--copy_feats_to_dir",
+            default=None,
+            type=str_or_none,
+            help="Copies input feats (eg: fbank ark files) to the given dir, \
+and updates the path in feats.scp, train_data_path_and_name_and_type. \
+This should avoid reading from disk server every time and thus prevent \
+any disk IO bottlenecks.",
+        )
+        group.add_argument(
+            "--safe_gpu",
+            action="store_true",
+            help="Use safe_gpu package to acquire free GPUs and set CUDA_VISIBLE_DEVICES.\
+When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.",
+        )
         group.add_argument(
             "--print_config",
             action="store_true",
@@ -337,10 +346,7 @@ class AbsTask(ABC):
 
         group = parser.add_argument_group("distributed training related")
         group.add_argument(
-            "--dist_backend",
-            default="nccl",
-            type=str,
-            help="distributed backend",
+            "--dist_backend", default="nccl", type=str, help="distributed backend",
         )
         group.add_argument(
             "--dist_init_method",
@@ -578,34 +584,19 @@ class AbsTask(ABC):
             help="Enable tensorboard logging",
         )
         group.add_argument(
-            "--use_wandb",
-            type=str2bool,
-            default=False,
-            help="Enable wandb logging",
+            "--use_wandb", type=str2bool, default=False, help="Enable wandb logging",
         )
         group.add_argument(
-            "--wandb_project",
-            type=str,
-            default=None,
-            help="Specify wandb project",
+            "--wandb_project", type=str, default=None, help="Specify wandb project",
         )
         group.add_argument(
-            "--wandb_id",
-            type=str,
-            default=None,
-            help="Specify wandb id",
+            "--wandb_id", type=str, default=None, help="Specify wandb id",
         )
         group.add_argument(
-            "--wandb_entity",
-            type=str,
-            default=None,
-            help="Specify wandb entity",
+            "--wandb_entity", type=str, default=None, help="Specify wandb entity",
         )
         group.add_argument(
-            "--wandb_name",
-            type=str,
-            default=None,
-            help="Specify wandb run name",
+            "--wandb_name", type=str, default=None, help="Specify wandb run name",
         )
         group.add_argument(
             "--wandb_model_log_interval",
@@ -649,11 +640,7 @@ class AbsTask(ABC):
             help="Ignore size mismatch when loading pre-trained model",
         )
         group.add_argument(
-            "--freeze_param",
-            type=str,
-            default=[],
-            nargs="*",
-            help="Freeze parameters",
+            "--freeze_param", type=str, default=[], nargs="*", help="Freeze parameters",
         )
 
         group = parser.add_argument_group("BatchSampler related")
@@ -853,10 +840,93 @@ class AbsTask(ABC):
         return parser
 
     @classmethod
+    def copy_feats_to_dir(cls, args: argparse.Namespace) -> None:
+        """Copies feats to the given dir (eg: /tmp in local machine
+        or /mnt/ssd/), and updates the  path in feats.scp,
+        train_data_path_and_name_and_type ..."""
+
+        user = os.environ.get("USER", "unk")
+
+        base_dir = Path(args.copy_feats_to_dir) /  user
+        base_dir.mkdir(parents=True, exist_ok=True)
+
+        #  dict where key is local feat dir, value is empty lock file indicating reading
+        args.local_feat_dirs = {}
+
+        for i, tupl in enumerate(args.train_data_path_and_name_and_type):
+            _path, _name, _type = tupl
+
+            set_path = PurePath(_path)
+            if _name == "speech" and _type == "kaldi_ark":
+
+                sub_dir = base_dir / set_path.parent.name
+                sub_dir.mkdir(parents=True, exist_ok=True)
+                logging.info("Created directory {:s}".format(str(sub_dir)))
+
+                rand_str = "".join(random.choices(string.ascii_letters, k=8))
+                lock_fname = sub_dir / f"read_lock_{rand_str}"
+                open(lock_fname, "w").close()
+                args.local_feat_dirs[sub_dir] = lock_fname
+                logging.info("Created read_lock file: {:s}".format(str(lock_fname)))
+
+                logging.info(f"Copying {_type} feats to local feat dir: " + str(sub_dir))
+
+                data = read_2column_text(_path)
+
+                uniq_ark = {}  # {utt_id: [src_path, tgt_path], ...}
+
+                new_data = []
+                for utt_id, ark_line in data.items():
+
+                    src_ark_path, sfx = ark_line.split(":")
+                    ark_base = PurePath(src_ark_path).name
+
+                    new_ark_path = sub_dir / ark_base
+                    new_data.append(f"{utt_id} {new_ark_path}:{sfx}")
+
+                    if ark_base not in uniq_ark:
+                        uniq_ark[ark_base] = [src_ark_path, str(new_ark_path)]
+
+                n_copied = 1
+                stime = time()
+                for ark_base, (src_path, tgt_path) in uniq_ark.items():
+                    # one ark file contains feats to many utts
+                    if not os.path.exists(new_ark_path):
+                        shutil.copyfile(src_path, tgt_path)
+                        logging.info("Copied: {:s} - {:3d}/{:3d}".format(ark_base, n_copied, len(uniq_ark)))
+                    else:
+                        logging.info("{:s} already present. Not copying it again.".format(ark_base))
+                    n_copied += 1
+
+                logging.info(
+                    "Copying done in {:.2f} minutes".format((time() - stime) / 60.0)
+                )
+                new_feats_scp_file = sub_dir / "feats.scp"
+                with open(new_feats_scp_file, "w") as fpw:
+                    fpw.write("\n".join(new_data) + "\n")
+
+                args.train_data_path_and_name_and_type[i] = (str(new_feats_scp_file), _name, _type)
+
+    @classmethod
+    def remove_temp_feats_dir(cls, args: argparse.Namespace) -> None:
+        """Remove local feats dir where feats were copied"""
+
+        for local_feat_dir, lock_fname in args.local_feat_dirs.items():
+            if os.path.exists(lock_fname):
+                # remove the read_lock file created by this job
+                os.remove(lock_fname)
+                logging.info("Removed lock file: " + str(lock_fname))
+                lock_files = glob(str(local_feat_dir) + "/read_lock_*")
+                if len(lock_files) == 0:
+                    shutil.rmtree(str(local_feat_dir))
+                    logging.info("Removed local feat dir : " + str(local_feat_dir))
+                else:
+                    logging.info("Not removing local feat dir {:s}, as other ({:d}) \
+                    read_lock files were found.".format(str(local_feat_dir), len(lock_files)))
+
+    @classmethod
     def build_optimizers(
-        cls,
-        args: argparse.Namespace,
-        model: torch.nn.Module,
+        cls, args: argparse.Namespace, model: torch.nn.Module,
     ) -> List[torch.optim.Optimizer]:
         if cls.num_optimizers != 1:
             raise RuntimeError(
@@ -973,7 +1043,6 @@ class AbsTask(ABC):
             f'"{cls.__name__}.optional_data_names()". '
             f"Otherwise you need to set --allow_variable_data_keys true "
         )
-
         for k in cls.required_data_names(train, inference):
             if not dataset.has_name(k):
                 raise RuntimeError(
@@ -1002,6 +1071,7 @@ class AbsTask(ABC):
     def main(cls, args: argparse.Namespace = None, cmd: Sequence[str] = None):
         assert check_argument_types()
         print(get_commandline_args(), file=sys.stderr)
+
         if args is None:
             parser = cls.get_parser()
             args = parser.parse_args(cmd)
@@ -1012,6 +1082,14 @@ class AbsTask(ABC):
             cls.print_config()
             sys.exit(0)
         cls.check_required_command_args(args)
+
+        if args.safe_gpu:
+            from safe_gpu import safe_gpu
+
+            gpu_owner = safe_gpu.GPUOwner(
+                nb_gpus=args.ngpu, logger=None, placeholder_fn=None
+            )
+            print("env CUDA_VISIBLE_DEVICES=", os.environ.get("CUDA_VISIBLE_DEVICES"))
 
         # "distributed" is decided using the other command args
         resolve_distributed_mode(args)
@@ -1058,9 +1136,7 @@ class AbsTask(ABC):
                 local_args.ngpu = 1
 
                 process = mp.Process(
-                    target=cls.main_worker,
-                    args=(local_args,),
-                    daemon=False,
+                    target=cls.main_worker, args=(local_args,), daemon=False,
                 )
                 process.start()
                 processes.append(process)
@@ -1237,23 +1313,20 @@ class AbsTask(ABC):
                     else "cpu",
                 )
 
+            if args.copy_feats_to_dir:
+                cls.copy_feats_to_dir(args)
+
             # 7. Build iterator factories
             if args.multiple_iterator:
                 train_iter_factory = cls.build_multiple_iter_factory(
-                    args=args,
-                    distributed_option=distributed_option,
-                    mode="train",
+                    args=args, distributed_option=distributed_option, mode="train",
                 )
             else:
                 train_iter_factory = cls.build_iter_factory(
-                    args=args,
-                    distributed_option=distributed_option,
-                    mode="train",
+                    args=args, distributed_option=distributed_option, mode="train",
                 )
             valid_iter_factory = cls.build_iter_factory(
-                args=args,
-                distributed_option=distributed_option,
-                mode="valid",
+                args=args, distributed_option=distributed_option, mode="valid",
             )
             if not args.use_matplotlib and args.num_att_plot != 0:
                 args.num_att_plot = 0
@@ -1261,9 +1334,7 @@ class AbsTask(ABC):
 
             if args.num_att_plot != 0:
                 plot_attention_iter_factory = cls.build_iter_factory(
-                    args=args,
-                    distributed_option=distributed_option,
-                    mode="plot_att",
+                    args=args, distributed_option=distributed_option, mode="plot_att",
                 )
             else:
                 plot_attention_iter_factory = None
@@ -1300,7 +1371,7 @@ class AbsTask(ABC):
                         name=name,
                         dir=output_dir,
                         id=args.wandb_id,
-                        resume="allow",
+                        resume=args.resume,
                     )
                     wandb.config.update(args)
                 else:
@@ -1323,15 +1394,15 @@ class AbsTask(ABC):
                 distributed_option=distributed_option,
             )
 
-            if wandb.run:
+            if args.use_wandb and wandb.run:
                 wandb.finish()
+
+            if args.copy_feats_to_dir:
+                cls.remove_temp_feats_dir(args)
 
     @classmethod
     def build_iter_options(
-        cls,
-        args: argparse.Namespace,
-        distributed_option: DistributedOption,
-        mode: str,
+        cls, args: argparse.Namespace, distributed_option: DistributedOption, mode: str,
     ):
         if mode == "train":
             preprocess_fn = cls.build_preprocess_fn(args, train=True)
@@ -1454,21 +1525,15 @@ class AbsTask(ABC):
 
         if args.iterator_type == "sequence":
             return cls.build_sequence_iter_factory(
-                args=args,
-                iter_options=iter_options,
-                mode=mode,
+                args=args, iter_options=iter_options, mode=mode,
             )
         elif args.iterator_type == "chunk":
             return cls.build_chunk_iter_factory(
-                args=args,
-                iter_options=iter_options,
-                mode=mode,
+                args=args, iter_options=iter_options, mode=mode,
             )
         elif args.iterator_type == "task":
             return cls.build_task_iter_factory(
-                args=args,
-                iter_options=iter_options,
-                mode=mode,
+                args=args, iter_options=iter_options, mode=mode,
             )
         else:
             raise RuntimeError(f"Not supported: iterator_type={args.iterator_type}")
@@ -1553,10 +1618,7 @@ class AbsTask(ABC):
 
     @classmethod
     def build_chunk_iter_factory(
-        cls,
-        args: argparse.Namespace,
-        iter_options: IteratorOptions,
-        mode: str,
+        cls, args: argparse.Namespace, iter_options: IteratorOptions, mode: str,
     ) -> AbsIterFactory:
         assert check_argument_types()
 
@@ -1626,10 +1688,7 @@ class AbsTask(ABC):
     # NOTE(kamo): Not abstract class
     @classmethod
     def build_task_iter_factory(
-        cls,
-        args: argparse.Namespace,
-        iter_options: IteratorOptions,
-        mode: str,
+        cls, args: argparse.Namespace, iter_options: IteratorOptions, mode: str,
     ) -> AbsIterFactory:
         """Build task specific iterator factory
 
@@ -1781,10 +1840,7 @@ class AbsTask(ABC):
         )
 
         return DataLoader(
-            dataset=dataset,
-            pin_memory=ngpu > 0,
-            num_workers=num_workers,
-            **kwargs,
+            dataset=dataset, pin_memory=ngpu > 0, num_workers=num_workers, **kwargs,
         )
 
     # ~~~~~~~~~ The methods below are mainly used for inference ~~~~~~~~~
