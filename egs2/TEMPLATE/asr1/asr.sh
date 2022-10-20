@@ -145,6 +145,7 @@ local_score_opts=          # The options given to local/score.sh.
 asr_speech_fold_length=800 # fold_length for speech data during ASR training.
 asr_text_fold_length=150   # fold_length for text data during ASR training.
 lm_fold_length=150         # fold_length for LM training.
+token_listdir=
 
 help_message=$(cat << EOF
 Usage: $0 --train-set "<train_set_name>" --valid-set "<valid_set_name>" --test_sets "<test_set_names>"
@@ -248,6 +249,7 @@ Options:
     --asr_speech_fold_length # fold_length for speech data during ASR training (default="${asr_speech_fold_length}").
     --asr_text_fold_length   # fold_length for text data during ASR training (default="${asr_text_fold_length}").
     --lm_fold_length         # fold_length for LM training (default="${lm_fold_length}").
+    --token_listdir
 EOF
 )
 
@@ -295,12 +297,15 @@ fi
 # Use the text of the 1st evaldir if lm_test is not specified
 [ -z "${lm_test_text}" ] && lm_test_text="${data_feats}/${test_sets%% *}/text"
 
-# Check tokenization type
-if [ "${lang}" != noinfo ]; then
-    token_listdir=${datadir}/${lang}_token_list
-else
-    token_listdir=${datadir}/token_list
+if [ -z "${token_listdir}" ]; then
+    # Check tokenization type
+    if [ "${lang}" != noinfo ]; then
+        token_listdir=${datadir}/${lang}_token_list
+    else
+        token_listdir=${datadir}/token_list
+    fi
 fi
+
 bpedir="${token_listdir}/bpe_${bpemode}${nbpe}"
 bpeprefix="${bpedir}"/bpe
 bpemodel="${bpeprefix}".model
@@ -1116,6 +1121,7 @@ if ! "${skip_train}"; then
                 --fold_length "${_fold_length}" \
                 --fold_length "${asr_text_fold_length}" \
                 --output_dir "${asr_exp}" \
+                --copy_feats_to_dir "/mnt/ssd" \
                 ${_opts} ${asr_args}
 
     fi

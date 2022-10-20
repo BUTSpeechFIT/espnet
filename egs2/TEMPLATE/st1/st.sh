@@ -1323,6 +1323,7 @@ if ! "${skip_train}"; then
                 --fold_length "${st_text_fold_length}" \
                 --fold_length "${st_text_fold_length}" \
                 --output_dir "${st_exp}" \
+                --copy_feats_to_dir "/mnt/ssd" \
                 ${_opts} ${st_args}
 
     fi
@@ -1461,6 +1462,15 @@ if ! "${skip_eval}"; then
 
             _scoredir="${_dir}/score_bleu"
             mkdir -p "${_scoredir}"
+
+            # <"${_data}/text.${tgt_case}.${tgt_lang}" \
+            #     ${python} -m espnet2.bin.tokenize_text  \
+            #         -f 2- --input - --output - \
+            #         --token_type word \
+            #         --non_linguistic_symbols "${nlsyms_txt}" \
+            #         --remove_non_linguistic_symbols true \
+            #         --cleaner "${cleaner}" \
+            #>"${_scoredir}/ref.trn"
 
             paste \
                 <(<"${_data}/text.${tgt_case}.${tgt_lang}" \
