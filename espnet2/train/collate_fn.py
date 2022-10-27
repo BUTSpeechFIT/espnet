@@ -44,11 +44,11 @@ class CommonCollateFn:
 
 
 def common_collate_fn(
-    data: Collection[Tuple[str, Dict[str, np.ndarray]]],
+    collection: Collection[Tuple[str, Dict[str, Union[np.ndarray, str]]]],
     float_pad_value: Union[float, int] = 0.0,
     int_pad_value: int = -32768,
     not_sequence: Collection[str] = (),
-) -> Tuple[List[str], Dict[str, torch.Tensor]]:
+) -> Tuple[Union[List[str], Tuple[List, str]], Dict[str, torch.Tensor]]:
     """Concatenate ndarray-list to an array and convert to torch.Tensor.
 
     Examples:
@@ -67,8 +67,30 @@ def common_collate_fn(
 
     """
     assert check_argument_types()
-    uttids = [u for u, _ in data]
-    data = [d for _, d in data]
+
+    uttids = []
+    # uttids = [u for u, _ in collection]
+
+    # check if dict has 'lid' and remove it from every dict-element in collection
+    lid_for_batch = ""
+    data = []
+    for u, d in collection:
+        uttids.append(u)
+        if "lid" in d:
+            if lid_for_batch:
+                assert (
+                    lid_for_batch == d["lid"]
+                ), "All utterance IDs in a batch \
+                    should belong to same language/lid/category. Found lids: \
+                    {:s} and {:s}. Check utt ID {:s}. Use utt2category to indicate \
+                    utt2lid mapping".format(
+                    lid_for_batch, d["lid"], u
+                )
+            else:
+                lid_for_batch = d["lid"]
+            del d["lid"]
+
+        data.append(d)
 
     assert all(set(data[0]) == set(d) for d in data), "dict-keys mismatching"
     assert all(
@@ -76,7 +98,8 @@ def common_collate_fn(
     ), f"*_lengths is reserved: {list(data[0])}"
 
     output = {}
-    for key in data[0]:
+    for key in data[0]:  # dict with keys: eg: speech, text
+
         # NOTE(kamo):
         # Each models, which accepts these values finally, are responsible
         # to repaint the pad_value to the desired value for each tasks.
@@ -99,6 +122,10 @@ def common_collate_fn(
             lens = torch.tensor([d[key].shape[0] for d in data], dtype=torch.long)
             output[key + "_lengths"] = lens
 
-    output = (uttids, output)
+    if lid_for_batch:
+        output = ((uttids, lid_for_batch), output)
+    else:
+        output = (uttids, output)
+
     assert check_return_type(output)
     return output

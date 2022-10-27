@@ -10,6 +10,8 @@ import random
 import string
 from time import time
 
+from distutils.version import LooseVersion
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path, PurePath
@@ -22,7 +24,6 @@ import torch.multiprocessing
 import torch.nn
 import torch.optim
 import yaml
-from packaging.version import parse as V
 from torch.utils.data import DataLoader
 from typeguard import check_argument_types, check_return_type
 
@@ -75,7 +76,7 @@ try:
 except Exception:
     wandb = None
 
-if V(torch.__version__) >= V("1.5.0"):
+if LooseVersion(torch.__version__) >= LooseVersion("1.5.0"):
     from torch.multiprocessing.spawn import ProcessContext
 else:
     from torch.multiprocessing.spawn import SpawnContext as ProcessContext
@@ -93,7 +94,7 @@ optim_classes = dict(
     rmsprop=torch.optim.RMSprop,
     rprop=torch.optim.Rprop,
 )
-if V(torch.__version__) >= V("1.10.0"):
+if LooseVersion(torch.__version__) >= LooseVersion("1.10.0"):
     # From 1.10.0, RAdam is officially supported
     optim_classes.update(radam=torch.optim.RAdam,)
 try:
@@ -113,7 +114,7 @@ try:
         sgdw=torch_optimizer.SGDW,
         yogi=torch_optimizer.Yogi,
     )
-    if V(torch_optimizer.__version__) < V("0.2.0"):
+    if LooseVersion(torch_optimizer.__version__) < LooseVersion("0.2.0"):
         # From 0.2.0, RAdam is dropped
         optim_classes.update(radam=torch_optimizer.RAdam,)
     del torch_optimizer
@@ -279,6 +280,15 @@ class AbsTask(ABC):
         parser.set_defaults(required=["output_dir"])
 
         group = parser.add_argument_group("Common configuration")
+
+        group.add_argument(
+            "--input_token_list_ftype",
+            type=str,
+            default="token_list",
+            choices=["token_list", "token_flist"],
+            help="File type of files in token_list directory, 'token_list' for default files, \
+                'token_flist' for files containing lid and path.",
+        )
 
         group.add_argument(
             "--copy_feats_to_dir",
@@ -847,7 +857,7 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
 
         user = os.environ.get("USER", "unk")
 
-        base_dir = Path(args.copy_feats_to_dir) /  user
+        base_dir = Path(args.copy_feats_to_dir) / user
         base_dir.mkdir(parents=True, exist_ok=True)
 
         #  dict where key is local feat dir, value is empty lock file indicating reading
@@ -869,7 +879,9 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
                 args.local_feat_dirs[sub_dir] = lock_fname
                 logging.info("Created read_lock file: {:s}".format(str(lock_fname)))
 
-                logging.info(f"Copying {_type} feats to local feat dir: " + str(sub_dir))
+                logging.info(
+                    f"Copying {_type} feats to local feat dir: " + str(sub_dir)
+                )
 
                 data = read_2column_text(_path)
 
@@ -893,9 +905,17 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
                     # one ark file contains feats to many utts
                     if not os.path.exists(new_ark_path):
                         shutil.copyfile(src_path, tgt_path)
-                        logging.info("Copied: {:s} - {:3d}/{:3d}".format(ark_base, n_copied, len(uniq_ark)))
+                        logging.info(
+                            "Copied: {:s} - {:3d}/{:3d}".format(
+                                ark_base, n_copied, len(uniq_ark)
+                            )
+                        )
                     else:
-                        logging.info("{:s} already present. Not copying it again.".format(ark_base))
+                        logging.info(
+                            "{:s} already present. Not copying it again.".format(
+                                ark_base
+                            )
+                        )
                     n_copied += 1
 
                 logging.info(
@@ -905,7 +925,11 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
                 with open(new_feats_scp_file, "w") as fpw:
                     fpw.write("\n".join(new_data) + "\n")
 
-                args.train_data_path_and_name_and_type[i] = (str(new_feats_scp_file), _name, _type)
+                args.train_data_path_and_name_and_type[i] = (
+                    str(new_feats_scp_file),
+                    _name,
+                    _type,
+                )
 
     @classmethod
     def remove_temp_feats_dir(cls, args: argparse.Namespace) -> None:
@@ -921,8 +945,12 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
                     shutil.rmtree(str(local_feat_dir))
                     logging.info("Removed local feat dir : " + str(local_feat_dir))
                 else:
-                    logging.info("Not removing local feat dir {:s}, as other ({:d}) \
-                    read_lock files were found.".format(str(local_feat_dir), len(lock_files)))
+                    logging.info(
+                        "Not removing local feat dir {:s}, as other ({:d}) \
+                    read_lock files were found.".format(
+                            str(local_feat_dir), len(lock_files)
+                        )
+                    )
 
     @classmethod
     def build_optimizers(
@@ -1043,6 +1071,7 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
             f'"{cls.__name__}.optional_data_names()". '
             f"Otherwise you need to set --allow_variable_data_keys true "
         )
+
         for k in cls.required_data_names(train, inference):
             if not dataset.has_name(k):
                 raise RuntimeError(
@@ -1268,7 +1297,6 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
                 valid_key_file = args.valid_shape_file[0]
             else:
                 valid_key_file = None
-
             collect_stats(
                 model=model,
                 train_iter=cls.build_streaming_iterator(

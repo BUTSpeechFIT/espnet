@@ -92,38 +92,27 @@ frontend_choices = ClassChoices(
 )
 specaug_choices = ClassChoices(
     name="specaug",
-    classes=dict(
-        specaug=SpecAug,
-    ),
+    classes=dict(specaug=SpecAug,),
     type_check=AbsSpecAug,
     default=None,
     optional=True,
 )
 normalize_choices = ClassChoices(
     "normalize",
-    classes=dict(
-        global_mvn=GlobalMVN,
-        utterance_mvn=UtteranceMVN,
-    ),
+    classes=dict(global_mvn=GlobalMVN, utterance_mvn=UtteranceMVN,),
     type_check=AbsNormalize,
     default="utterance_mvn",
     optional=True,
 )
 model_choices = ClassChoices(
     "model",
-    classes=dict(
-        espnet=ESPnetASRModel,
-        maskctc=MaskCTCModel,
-    ),
+    classes=dict(espnet=ESPnetASRModel, maskctc=MaskCTCModel,),
     type_check=AbsESPnetModel,
     default="espnet",
 )
 preencoder_choices = ClassChoices(
     name="preencoder",
-    classes=dict(
-        sinc=LightweightSincConvs,
-        linear=LinearProjection,
-    ),
+    classes=dict(sinc=LightweightSincConvs, linear=LinearProjection,),
     type_check=AbsPreEncoder,
     default=None,
     optional=True,
@@ -147,9 +136,7 @@ encoder_choices = ClassChoices(
 )
 postencoder_choices = ClassChoices(
     name="postencoder",
-    classes=dict(
-        hugging_face_transformers=HuggingFaceTransformersPostEncoder,
-    ),
+    classes=dict(hugging_face_transformers=HuggingFaceTransformersPostEncoder,),
     type_check=AbsPostEncoder,
     default=None,
     optional=True,
@@ -353,6 +340,7 @@ class ASRTask(AbsTask):
                 bpemodel=args.bpemodel,
                 non_linguistic_symbols=args.non_linguistic_symbols,
                 text_cleaner=args.cleaner,
+                input_token_list_ftype=args.input_token_list_ftype,
                 g2p_type=args.g2p,
                 # NOTE(kamo): Check attribute existence for backward compatibility
                 rir_scp=args.rir_scp if hasattr(args, "rir_scp") else None,
@@ -373,6 +361,7 @@ class ASRTask(AbsTask):
         else:
             retval = None
         assert check_return_type(retval)
+        # one common preprocessor contain dict with-in
         return retval
 
     @classmethod
@@ -390,7 +379,7 @@ class ASRTask(AbsTask):
     def optional_data_names(
         cls, train: bool = True, inference: bool = False
     ) -> Tuple[str, ...]:
-        retval = ()
+        retval = ("lid",)
         assert check_return_type(retval)
         return retval
 
@@ -398,17 +387,39 @@ class ASRTask(AbsTask):
     def build_model(cls, args: argparse.Namespace) -> ESPnetASRModel:
         assert check_argument_types()
         if isinstance(args.token_list, str):
-            with open(args.token_list, encoding="utf-8") as f:
-                token_list = [line.rstrip() for line in f]
+            # check if token list is regular file or containing lid and path to language token list
+            if args.input_token_list_ftype == "token_list":
+                with open(args.token_list, encoding="utf-8") as f:
+                    token_list = [line.rstrip() for line in f]
 
-            # Overwriting token_list to keep it as "portable".
-            args.token_list = list(token_list)
+                # Overwriting token_list to keep it as "portable".
+                args.token_list = list(token_list)
+            else:
+                token_list = {}
+                vocab_size = {}
+                with open(args.token_list, encoding="utf-8") as f:
+                    for line in f:
+                        # read language ID and corresponding token_list
+                        lid, path = line.rstrip("\n").split(" ")
+
+                        with open(path, encoding="utf-8") as token_list_file:
+                            token_list[lid] = [
+                                line.rstrip() for line in token_list_file
+                            ]
+                            vocab_size[lid] = len(token_list[lid])
+
+                # Overwriting token_list to keep it as "portable".
+                args.token_list = token_list
+
         elif isinstance(args.token_list, (tuple, list)):
             token_list = list(args.token_list)
         else:
             raise RuntimeError("token_list must be str or list")
-        vocab_size = len(token_list)
-        logging.info(f"Vocabulary size: {vocab_size }")
+
+        if args.input_token_list_ftype == "token_list":
+            vocab_size = len(token_list)
+
+        logging.info(f"Vocabulary size: {vocab_size}")
 
         # 1. frontend
         if args.input_size is None:
@@ -466,11 +477,7 @@ class ASRTask(AbsTask):
         decoder_class = decoder_choices.get_class(args.decoder)
 
         if args.decoder == "transducer":
-            decoder = decoder_class(
-                vocab_size,
-                embed_pad=0,
-                **args.decoder_conf,
-            )
+            decoder = decoder_class(vocab_size, embed_pad=0, **args.decoder_conf,)
 
             joint_network = JointNetwork(
                 vocab_size,
@@ -488,9 +495,19 @@ class ASRTask(AbsTask):
             joint_network = None
 
         # 6. CTC
-        ctc = CTC(
-            odim=vocab_size, encoder_output_size=encoder_output_size, **args.ctc_conf
-        )
+        if isinstance(vocab_size, int):
+            ctc = CTC(
+                odim=vocab_size,
+                encoder_output_size=encoder_output_size,
+                **args.ctc_conf,
+            )
+        else:
+            # dict of CTC - incase of multilingual model
+            ctc = torch.nn.ModuleDict()
+            for lid, vsize in vocab_size.items():
+                ctc[lid] = CTC(
+                    odim=vsize, encoder_output_size=encoder_output_size, **args.ctc_conf
+                )
 
         # 7. Build model
         try:

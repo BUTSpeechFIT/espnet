@@ -58,6 +58,7 @@ def load_pretrained_model(
         ... )
         >>> load_pretrained_model("somewhere/decoder.pth::decoder", model)
     """
+
     logger = logging.getLogger()
     sps = init_param.split(":", 4)
     if len(sps) == 4:
@@ -100,6 +101,7 @@ def load_pretrained_model(
         obj = get_attr(model, dst_key)
 
     src_state = torch.load(path, map_location=map_location)
+    logger.info("Loaded {:s}".format(path))
     if excludes is not None:
         for e in excludes.split(","):
             src_state = {k: v for k, v in src_state.items() if not k.startswith(e)}

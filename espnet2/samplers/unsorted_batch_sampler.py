@@ -57,6 +57,7 @@ class UnsortedBatchSampler(AbsSampler):
         else:
             category2utt["default_category"] = keys
 
+        self.batch_categories = []  # empty list in case utt2category_file is None
         self.batch_list = []
         for d, v in category2utt.items():
             category_keys = v
@@ -75,6 +76,8 @@ class UnsortedBatchSampler(AbsSampler):
                     for i in range(N)
                 ]
             self.batch_list.extend(cur_batch_list)
+            if utt2category_file is not None:
+                self.batch_categories.extend([d] * len(cur_batch_list))
 
     def __repr__(self):
         return (

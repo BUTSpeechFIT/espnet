@@ -109,7 +109,7 @@ class IterableESPnetDataset(IterableDataset):
                 self.path_name_type_list.append((path, name, _type))
 
         if len(non_iterable_list) != 0:
-            # Some types doesn't support iterable mode
+            # Some types doesn't support iterable modea
             self.non_iterable_dataset = ESPnetDataset(
                 path_name_type_list=non_iterable_list,
                 preprocess=preprocess,
@@ -215,6 +215,8 @@ class IterableESPnetDataset(IterableDataset):
 
             # 4. Force data-precision
             for name in data:
+                if name == "lid":  # do not enforce data precision for lid (lang ID)
+                    continue
                 value = data[name]
                 if not isinstance(value, np.ndarray):
                     raise RuntimeError(

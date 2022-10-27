@@ -171,10 +171,12 @@ class TransformerEncoder(AbsEncoder):
         Args:
             xs_pad: input tensor (B, L, D)
             ilens: input length (B)
+            masks: torch.Tensor
             prev_states: Not to be used now.
         Returns:
             position embedded tensor and mask
         """
+
         masks = (~make_pad_mask(ilens)[:, None, :]).to(xs_pad.device)
 
         if self.embed is None:

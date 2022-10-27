@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 from abc import ABC
 from abc import abstractmethod
 import collections
@@ -383,7 +385,10 @@ class ESPnetDataset(AbsDataset):
         _mes += f"\n  preprocess: {self.preprocess})"
         return _mes
 
-    def __getitem__(self, uid: Union[str, int]) -> Tuple[str, Dict[str, np.ndarray]]:
+    def __getitem__(
+        self, uid: Union[str, int]
+    ) -> Tuple[str, Dict[str, Union[np.ndarray, str]]]:
+
         assert check_argument_types()
 
         # Change integer-id to string-id
@@ -400,6 +405,9 @@ class ESPnetDataset(AbsDataset):
         for name, loader in self.loader_dict.items():
             try:
                 value = loader[uid]
+                # if self.preserve_lid:
+                #     lid = self.lid2int[value[0]]
+                #     value = value[1]
                 if isinstance(value, (list, tuple)):
                     value = np.array(value)
                 if not isinstance(
@@ -422,6 +430,7 @@ class ESPnetDataset(AbsDataset):
                 value = np.array([value])
             data[name] = value
 
+
         # 2. [Option] Apply preprocessing
         #   e.g. espnet2.train.preprocessor:CommonPreprocessor
         if self.preprocess is not None:
@@ -429,6 +438,8 @@ class ESPnetDataset(AbsDataset):
 
         # 3. Force data-precision
         for name in data:
+            if name == "lid":
+                continue
             value = data[name]
             if not isinstance(value, np.ndarray):
                 raise RuntimeError(
@@ -449,5 +460,55 @@ class ESPnetDataset(AbsDataset):
             self.cache[uid] = data
 
         retval = uid, data
+
         assert check_return_type(retval)
         return retval
+
+
+if __name__ == "__main__":
+
+    # testing
+
+    import os
+
+    pre = "/mnt/matylda4/xsarva00/NEUREM3/espnet/egs2/multilingual_ASR/asr1/"
+
+    token_type = "bpe"
+    token_list = os.path.join(pre, "data/token_list_test/bpe_unigram5000/tokens.txt")
+    bpemodel = os.path.join(pre, "data/token_list_test/bpe_unigram5000/bpe.model")
+
+    from espnet2.train.preprocessor import CommonPreprocessor
+
+    cmn_prep = CommonPreprocessor(
+        train=True,
+        token_type=token_type,
+        token_list=token_list,
+        bpemodel=bpemodel,
+        non_linguistic_symbols="",
+        text_cleaner=None,
+        g2p_type=None,
+        input_token_list_ftype="flist",
+    )
+
+    path_name_type_list = [
+        (
+            os.path.join(pre, "dump/extracted/train50h_it_nl/feats.scp"),
+            "speech",
+            "kaldi_ark",
+        ),
+        (os.path.join(pre, "dump/extracted/train50h_it_nl/text"), "text", "text"),
+        (
+            os.path.join(pre, "dump/extracted/train50h_it_nl/utt2category"),
+            "lid",
+            "text",
+        ),
+    ]
+    dset = ESPnetDataset(path_name_type_list, cmn_prep)
+
+    utt_ids = [
+        "f1d68c1db286092eb50d7d911841e6bf5d7bdb63128e3d23c2c49bdf47502f5d953f248d9ce137dc914958dda945dc92ad287ee4e81abd9d7aa03d14dea19d58-common_voice_nl_23957307",
+        "f1d68c1db286092eb50d7d911841e6bf5d7bdb63128e3d23c2c49bdf47502f5d953f248d9ce137dc914958dda945dc92ad287ee4e81abd9d7aa03d14dea19d58-common_voice_nl_23957308",
+    ]
+
+    for uid in utt_ids:
+        dset.__getitem__(uid)

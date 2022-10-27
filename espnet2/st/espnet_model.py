@@ -222,7 +222,7 @@ class ESPnetSTModel(AbsESPnetModel):
                 encoder_out, encoder_out_lens, src_text, src_text_lengths
             )
         else:
-            loss_asr_ctc, cer_asr_ctc = 0, None
+            loss_asr_ctc, cer_asr_ctc = 0., None
 
         # 2c. Attention-decoder branch (extra ASR)
         if self.asr_weight > 0 and self.mtlalpha < 1.0:

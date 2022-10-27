@@ -16,6 +16,7 @@ from typeguard import check_return_type
 from espnet2.text.build_tokenizer import build_tokenizer
 from espnet2.text.cleaner import TextCleaner
 from espnet2.text.token_id_converter import TokenIDConverter
+from espnet2.fileio.read_text import read_2column_text
 
 
 class AbsPreprocessor(ABC):
@@ -103,7 +104,7 @@ def detect_non_silence(
     )
     framed_w *= scipy.signal.get_window(window, frame_length).astype(framed_w.dtype)
     # power: (C, T)
-    power = (framed_w**2).mean(axis=-1)
+    power = (framed_w ** 2).mean(axis=-1)
     # mean_power: (C, 1)
     mean_power = np.mean(power, axis=-1, keepdims=True)
     if np.all(mean_power == 0):
@@ -145,6 +146,7 @@ class CommonPreprocessor(AbsPreprocessor):
         speech_volume_normalize: float = None,
         speech_name: str = "speech",
         text_name: str = "text",
+        input_token_list_ftype: str = "token_list",
     ):
         super().__init__(train)
         self.train = train
@@ -159,18 +161,58 @@ class CommonPreprocessor(AbsPreprocessor):
                 raise ValueError("token_list is required if token_type is not None")
             self.text_cleaner = TextCleaner(text_cleaner)
 
-            self.tokenizer = build_tokenizer(
-                token_type=token_type,
-                bpemodel=bpemodel,
-                delimiter=delimiter,
-                space_symbol=space_symbol,
-                non_linguistic_symbols=non_linguistic_symbols,
-                g2p_type=g2p_type,
-            )
-            self.token_id_converter = TokenIDConverter(
-                token_list=token_list,
-                unk_symbol=unk_symbol,
-            )
+            if input_token_list_ftype == "token_list":
+
+                # dictionary of tokenizers
+                self.tokenizer = build_tokenizer(
+                    token_type=token_type,
+                    bpemodel=bpemodel,
+                    delimiter=delimiter,
+                    space_symbol=space_symbol,
+                    non_linguistic_symbols=non_linguistic_symbols,
+                    g2p_type=g2p_type,
+                )
+                # dict of token_to_id_converters
+                self.token_id_converter = TokenIDConverter(
+                    token_list=token_list, unk_symbol=unk_symbol,
+                )
+
+            else:
+
+                self.tokenizer = {}
+                self.token_id_converter = {}
+
+                lid2bpe_fpaths = read_2column_text(bpemodel)
+                if isinstance(token_list, str):
+                    lid2token_fpaths = read_2column_text(token_list)
+                elif isinstance(token_list, dict):
+                    lid2token_fpaths = token_list
+                else:
+                    raise ValueError(
+                        "token_list must be either str or dict in case of multilingual models"
+                    )
+
+                for lid, bpe_path in lid2bpe_fpaths.items():
+
+                    self.tokenizer[lid] = build_tokenizer(
+                        token_type=token_type,
+                        bpemodel=bpe_path,
+                        delimiter=delimiter,
+                        space_symbol=space_symbol,
+                        non_linguistic_symbols=non_linguistic_symbols,
+                        g2p_type=g2p_type,
+                    )
+
+                    self.token_id_converter[lid] = TokenIDConverter(
+                        token_list=lid2token_fpaths[lid], unk_symbol=unk_symbol,
+                    )
+
+                # dictionary of tokenizers
+                # self.tokenizer = build_tokenizer(
+
+                # dict of token_to_id_converters
+                # self.token_id_converter = TokenIDConverter(
+
         else:
             self.text_cleaner = None
             self.tokenizer = None
@@ -281,7 +323,7 @@ class CommonPreprocessor(AbsPreprocessor):
                         # noise: (Nmic, Time)
                         noise = noise.T
 
-                        noise_power = (noise**2).mean()
+                        noise_power = (noise ** 2).mean()
                         scale = (
                             10 ** (-noise_db / 20)
                             * np.sqrt(power)
@@ -304,21 +346,30 @@ class CommonPreprocessor(AbsPreprocessor):
 
     def _text_process(
         self, data: Dict[str, Union[str, np.ndarray]]
-    ) -> Dict[str, np.ndarray]:
+    ) -> Dict[str, Union[np.ndarray, str]]:
+
+        # the data Dict must contain 'lid' as one of the keys
         if self.text_name in data and self.tokenizer is not None:
             text = data[self.text_name]
             text = self.text_cleaner(text)
-            tokens = self.tokenizer.text2tokens(text)
-            text_ints = self.token_id_converter.tokens2ids(tokens)
+            # need to change : self.tokenizer[lid].text2tokens
+            if isinstance(self.tokenizer, dict):
+                lid = data["lid"]
+                tokens = self.tokenizer[lid].text2tokens(text)
+                text_ints = self.token_id_converter[lid].tokens2ids(tokens)
+
+            else:
+                tokens = self.tokenizer.text2tokens(text)
+                text_ints = self.token_id_converter.tokens2ids(tokens)
             data[self.text_name] = np.array(text_ints, dtype=np.int64)
         assert check_return_type(data)
         return data
 
     def __call__(
         self, uid: str, data: Dict[str, Union[str, np.ndarray]]
-    ) -> Dict[str, np.ndarray]:
-        assert check_argument_types()
+    ) -> Dict[str, Union[np.ndarray, str]]:
 
+        assert check_argument_types()
         data = self._speech_process(data)
         data = self._text_process(data)
         return data
@@ -359,8 +410,7 @@ class CommonPreprocessor_multi(AbsPreprocessor):
                 g2p_type=g2p_type,
             )
             self.token_id_converter = TokenIDConverter(
-                token_list=token_list,
-                unk_symbol=unk_symbol,
+                token_list=token_list, unk_symbol=unk_symbol,
             )
         else:
             self.text_cleaner = None
@@ -464,10 +514,7 @@ class MutliTokenizerCommonPreprocessor(CommonPreprocessor):
                     )
                 )
                 self.token_id_converter.append(
-                    TokenIDConverter(
-                        token_list=token_list[i],
-                        unk_symbol=unk_symbol,
-                    )
+                    TokenIDConverter(token_list=token_list[i], unk_symbol=unk_symbol,)
                 )
             else:
                 self.tokenizer.append(None)

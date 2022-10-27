@@ -218,8 +218,7 @@ class Trainer:
         if distributed_option.distributed:
             if trainer_options.sharded_ddp:
                 dp_model = fairscale.nn.data_parallel.ShardedDataParallel(
-                    module=model,
-                    sharded_optimizer=optimizers,
+                    module=model, sharded_optimizer=optimizers,
                 )
             else:
                 dp_model = torch.nn.parallel.DistributedDataParallel(
@@ -240,8 +239,7 @@ class Trainer:
                 )
         elif distributed_option.ngpu > 1:
             dp_model = torch.nn.parallel.DataParallel(
-                model,
-                device_ids=list(range(distributed_option.ngpu)),
+                model, device_ids=list(range(distributed_option.ngpu)),
             )
         else:
             # NOTE(kamo): DataParallel also should work with ngpu=1,
@@ -512,7 +510,12 @@ class Trainer:
                 if iterator_stop > 0:
                     break
 
-            batch["utt_id"] = utt_id
+            if isinstance(utt_id[0], list):
+                batch["utt_id"] = utt_id[0]
+                batch["lid"] = utt_id[1]
+            else:
+                # instance is list
+                batch["utt_id"] = utt_id
 
             batch = to_device(batch, "cuda" if ngpu > 0 else "cpu")
             if no_forward_run:
@@ -608,9 +611,7 @@ class Trainer:
 
                 # compute the gradient norm to check if it is normal or not
                 grad_norm = torch.nn.utils.clip_grad_norm_(
-                    model.parameters(),
-                    max_norm=grad_clip,
-                    norm_type=grad_clip_type,
+                    model.parameters(), max_norm=grad_clip, norm_type=grad_clip_type,
                 )
                 # PyTorch<=1.4, clip_grad_norm_ returns float value
                 if not isinstance(grad_norm, torch.Tensor):
@@ -714,7 +715,11 @@ class Trainer:
                 if iterator_stop > 0:
                     break
 
-            batch["utt_id"] = utt_id
+            if isinstance(utt_id[0], list):
+                batch["utt_id"] = utt_id[0]
+                batch["lid"] = utt_id[1]
+            else:
+                batch["utt_id"] = utt_id
 
             batch = to_device(batch, "cuda" if ngpu > 0 else "cpu")
             if no_forward_run:
@@ -763,12 +768,19 @@ class Trainer:
         model.eval()
         for ids, batch in iterator:
             assert isinstance(batch, dict), type(batch)
-            assert len(next(iter(batch.values()))) == len(ids), (
+
+            lid = None
+            if isinstance(ids[0], list):
+                utt_ids = ids[0]
+                lid = ids[1]
+
+            assert len(next(iter(batch.values()))) == len(utt_ids), (
                 len(next(iter(batch.values()))),
-                len(ids),
+                len(utt_ids),
             )
 
-            batch["utt_id"] = ids
+            batch["utt_id"] = utt_ids
+            batch["lid"] = lid
 
             batch = to_device(batch, "cuda" if ngpu > 0 else "cpu")
             if no_forward_run:
@@ -780,8 +792,8 @@ class Trainer:
 
             # 2. Plot attentions: This part is slow due to matplotlib
             for k, att_list in att_dict.items():
-                assert len(att_list) == len(ids), (len(att_list), len(ids))
-                for id_, att_w in zip(ids, att_list):
+                assert len(att_list) == len(utt_ids), (len(att_list), len(utt_ids))
+                for id_, att_w in zip(utt_ids, att_list):
 
                     if isinstance(att_w, torch.Tensor):
                         att_w = att_w.detach().cpu().numpy()

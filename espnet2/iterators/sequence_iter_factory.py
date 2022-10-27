@@ -49,6 +49,9 @@ class SequenceIterFactory(AbsIterFactory):
         assert check_argument_types()
 
         if not isinstance(batches, AbsSampler):
+            # if batch_categories:
+            #    self.sampler = RawSampler(list(zip(batches, batch_categories)))
+            # else:
             self.sampler = RawSampler(batches)
         else:
             self.sampler = batches

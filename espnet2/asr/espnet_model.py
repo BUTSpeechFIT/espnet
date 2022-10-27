@@ -43,8 +43,8 @@ class ESPnetASRModel(AbsESPnetModel):
 
     def __init__(
         self,
-        vocab_size: int,
-        token_list: Union[Tuple[str, ...], List[str]],
+        vocab_size: Union[int, Dict[str, int]],
+        token_list: Union[Tuple[str, ...], List[str], Dict[str, List[str]]],
         frontend: Optional[AbsFrontend],
         specaug: Optional[AbsSpecAug],
         normalize: Optional[AbsNormalize],
@@ -52,7 +52,7 @@ class ESPnetASRModel(AbsESPnetModel):
         encoder: AbsEncoder,
         postencoder: Optional[AbsPostEncoder],
         decoder: AbsDecoder,
-        ctc: CTC,
+        ctc: Union[CTC, torch.nn.ModuleDict],
         joint_network: Optional[torch.nn.Module],
         ctc_weight: float = 0.5,
         interctc_weight: float = 0.0,
@@ -72,9 +72,21 @@ class ESPnetASRModel(AbsESPnetModel):
         super().__init__()
         # note that eos is the same as sos (equivalent ID)
         self.blank_id = 0
-        self.sos = vocab_size - 1
-        self.eos = vocab_size - 1
+
+        if isinstance(vocab_size, int):
+            self.sos = vocab_size - 1
+            self.eos = vocab_size - 1
+            self.is_multilingual = False
+        else:
+            self.is_multilingual = True
+            self.sos = {}
+            self.eos = {}
+            for lid, vsize in vocab_size.items():
+                self.sos[lid] = vsize - 1
+                self.eos[lid] = vsize - 1
+
         self.vocab_size = vocab_size
+
         self.ignore_id = ignore_id
         self.ctc_weight = ctc_weight
         self.interctc_weight = interctc_weight
@@ -90,6 +102,10 @@ class ESPnetASRModel(AbsESPnetModel):
         if not hasattr(self.encoder, "interctc_use_conditioning"):
             self.encoder.interctc_use_conditioning = False
         if self.encoder.interctc_use_conditioning:
+            if isinstance(vocab_size, dict):
+                raise TypeError(
+                    "vocab_size must be interger to use interctc_conditioning"
+                )
             self.encoder.conditioning_layer = torch.nn.Linear(
                 vocab_size, self.encoder.output_size()
             )
@@ -101,12 +117,14 @@ class ESPnetASRModel(AbsESPnetModel):
         if self.use_transducer_decoder:
             from warprnnt_pytorch import RNNTLoss
 
+            if isinstance(vocab_size, dict):
+                raise TypeError("vocab_size must be interger to use transducer")
+
             self.decoder = decoder
             self.joint_network = joint_network
 
             self.criterion_transducer = RNNTLoss(
-                blank=self.blank_id,
-                fastemit_lambda=0.0,
+                blank=self.blank_id, fastemit_lambda=0.0,
             )
 
             if report_cer or report_wer:
@@ -136,17 +154,34 @@ class ESPnetASRModel(AbsESPnetModel):
             else:
                 self.decoder = decoder
 
-            self.criterion_att = LabelSmoothingLoss(
-                size=vocab_size,
-                padding_idx=ignore_id,
-                smoothing=lsm_weight,
-                normalize_length=length_normalized_loss,
-            )
+            if isinstance(self.vocab_size, dict):
+                self.criterion_att = torch.nn.ModuleDict()
+                for lid, vsize in self.vocab_size.items():
+                    self.criterion_att[lid] = LabelSmoothingLoss(
+                        size=vsize,
+                        padding_idx=ignore_id,
+                        smoothing=lsm_weight,
+                        normalize_length=length_normalized_loss,
+                    )
+            else:
+                self.criterion_att = LabelSmoothingLoss(
+                    size=vocab_size,
+                    padding_idx=ignore_id,
+                    smoothing=lsm_weight,
+                    normalize_length=length_normalized_loss,
+                )
 
             if report_cer or report_wer:
-                self.error_calculator = ErrorCalculator(
-                    token_list, sym_space, sym_blank, report_cer, report_wer
-                )
+                if isinstance(token_list, int):
+                    self.error_calculator = ErrorCalculator(
+                        token_list, sym_space, sym_blank, report_cer, report_wer
+                    )
+                else:
+                    self.error_calculator = {}
+                    for lid, tlist in token_list.items():
+                        self.error_calculator[lid] = ErrorCalculator(
+                            tlist, sym_space, sym_blank, report_cer, report_wer
+                        )
 
         if ctc_weight == 0.0:
             self.ctc = None
@@ -182,6 +217,13 @@ class ESPnetASRModel(AbsESPnetModel):
         ), (speech.shape, speech_lengths.shape, text.shape, text_lengths.shape)
         batch_size = speech.shape[0]
 
+        lid = kwargs["lid"] if "lid" in kwargs else None
+
+        if isinstance(self.vocab_size, dict):
+            assert (
+                lid != None
+            ), "lid must be passed as kwargs in forward function, when vocab_size is a dict (multilingual mode)."
+
         # for data-parallel
         text = text[:, : text_lengths.max()]
 
@@ -197,15 +239,26 @@ class ESPnetASRModel(AbsESPnetModel):
         loss_transducer, cer_transducer, wer_transducer = None, None, None
         stats = dict()
 
+        lid_sfx = ""
+        if lid:
+            lid_sfx = "_" + lid
+
         # 1. CTC branch
         if self.ctc_weight != 0.0:
             loss_ctc, cer_ctc = self._calc_ctc_loss(
-                encoder_out, encoder_out_lens, text, text_lengths
+                encoder_out, encoder_out_lens, text, text_lengths, lid=lid
             )
 
             # Collect CTC branch stats
             stats["loss_ctc"] = loss_ctc.detach() if loss_ctc is not None else None
             stats["cer_ctc"] = cer_ctc
+
+            if lid:
+                # Collect CTC branch stats
+                stats["loss_ctc" + lid_sfx] = (
+                    loss_ctc.detach() if loss_ctc is not None else None
+                )
+                stats["cer_ctc" + lid_sfx] = cer_ctc
 
         # Intermediate CTC (optional)
         loss_interctc = 0.0
@@ -237,11 +290,7 @@ class ESPnetASRModel(AbsESPnetModel):
                 loss_transducer,
                 cer_transducer,
                 wer_transducer,
-            ) = self._calc_transducer_loss(
-                encoder_out,
-                encoder_out_lens,
-                text,
-            )
+            ) = self._calc_transducer_loss(encoder_out, encoder_out_lens, text,)
 
             if loss_ctc is not None:
                 loss = loss_transducer + (self.ctc_weight * loss_ctc)
@@ -259,7 +308,7 @@ class ESPnetASRModel(AbsESPnetModel):
             # 2b. Attention decoder branch
             if self.ctc_weight != 1.0:
                 loss_att, acc_att, cer_att, wer_att = self._calc_att_loss(
-                    encoder_out, encoder_out_lens, text, text_lengths
+                    encoder_out, encoder_out_lens, text, text_lengths, lid
                 )
 
             # 3. CTC-Att loss definition
@@ -275,6 +324,14 @@ class ESPnetASRModel(AbsESPnetModel):
             stats["acc"] = acc_att
             stats["cer"] = cer_att
             stats["wer"] = wer_att
+
+            if lid:
+                stats["loss_att" + lid_sfx] = (
+                    loss_att.detach() if loss_att is not None else None
+                )
+                stats["acc" + lid_sfx] = acc_att
+                stats["cer" + lid_sfx] = cer_att
+                stats["wer" + lid_sfx] = wer_att
 
         # Collect total loss stats
         stats["loss"] = loss.detach()
@@ -398,6 +455,10 @@ class ESPnetASRModel(AbsESPnetModel):
             ys_pad: (Batch, Length)
             ys_pad_lens: (Batch,)
         """
+
+        if isinstance(self.vocab_size, dict):
+            raise NotImplementedError("handle multilingual model")
+
         ys_in_pad, ys_out_pad = add_sos_eos(ys_pad, self.sos, self.eos, self.ignore_id)
         ys_in_lens = ys_pad_lens + 1
 
@@ -472,29 +533,50 @@ class ESPnetASRModel(AbsESPnetModel):
         encoder_out_lens: torch.Tensor,
         ys_pad: torch.Tensor,
         ys_pad_lens: torch.Tensor,
+        lid: Union[str, None] = None,
     ):
-        ys_in_pad, ys_out_pad = add_sos_eos(ys_pad, self.sos, self.eos, self.ignore_id)
+        if lid:
+            ys_in_pad, ys_out_pad = add_sos_eos(
+                ys_pad, self.sos[lid], self.eos[lid], self.ignore_id
+            )
+        else:
+            ys_in_pad, ys_out_pad = add_sos_eos(
+                ys_pad, self.sos, self.eos, self.ignore_id
+            )
         ys_in_lens = ys_pad_lens + 1
 
         # 1. Forward decoder
         decoder_out, _ = self.decoder(
-            encoder_out, encoder_out_lens, ys_in_pad, ys_in_lens
+            encoder_out, encoder_out_lens, ys_in_pad, ys_in_lens, lid
         )
 
         # 2. Compute attention loss
-        loss_att = self.criterion_att(decoder_out, ys_out_pad)
-        acc_att = th_accuracy(
-            decoder_out.view(-1, self.vocab_size),
-            ys_out_pad,
-            ignore_label=self.ignore_id,
-        )
+        if lid:
+            loss_att = self.criterion_att[lid](decoder_out, ys_out_pad)
+            acc_att = th_accuracy(
+                decoder_out.view(-1, self.vocab_size[lid]),
+                ys_out_pad,
+                ignore_label=self.ignore_id,
+            )
+        else:
+            loss_att = self.criterion_att(decoder_out, ys_out_pad)
+            acc_att = th_accuracy(
+                decoder_out.view(-1, self.vocab_size),
+                ys_out_pad,
+                ignore_label=self.ignore_id,
+            )
 
         # Compute cer/wer using attention-decoder
         if self.training or self.error_calculator is None:
             cer_att, wer_att = None, None
         else:
             ys_hat = decoder_out.argmax(dim=-1)
-            cer_att, wer_att = self.error_calculator(ys_hat.cpu(), ys_pad.cpu())
+            if lid:
+                cer_att, wer_att = self.error_calculator[lid](
+                    ys_hat.cpu(), ys_pad.cpu()
+                )
+            else:
+                cer_att, wer_att = self.error_calculator(ys_hat.cpu(), ys_pad.cpu())
 
         return loss_att, acc_att, cer_att, wer_att
 
@@ -504,15 +586,26 @@ class ESPnetASRModel(AbsESPnetModel):
         encoder_out_lens: torch.Tensor,
         ys_pad: torch.Tensor,
         ys_pad_lens: torch.Tensor,
+        lid: Union[str, None] = None,
     ):
-        # Calc CTC loss
-        loss_ctc = self.ctc(encoder_out, encoder_out_lens, ys_pad, ys_pad_lens)
 
-        # Calc CER using CTC
         cer_ctc = None
-        if not self.training and self.error_calculator is not None:
-            ys_hat = self.ctc.argmax(encoder_out).data
-            cer_ctc = self.error_calculator(ys_hat.cpu(), ys_pad.cpu(), is_ctc=True)
+
+        # Calc CTC loss
+        if lid:
+            loss_ctc = self.ctc[lid](encoder_out, encoder_out_lens, ys_pad, ys_pad_lens)
+            # Calc CER using CTC
+            if not self.training and self.error_calculator is not None:
+                ys_hat = self.ctc[lid].argmax(encoder_out).data
+                cer_ctc = self.error_calculator[lid](
+                    ys_hat.cpu(), ys_pad.cpu(), is_ctc=True
+                )
+        else:
+            loss_ctc = self.ctc(encoder_out, encoder_out_lens, ys_pad, ys_pad_lens)
+            # Calc CER using CTC
+            if not self.training and self.error_calculator is not None:
+                ys_hat = self.ctc.argmax(encoder_out).data
+                cer_ctc = self.error_calculator(ys_hat.cpu(), ys_pad.cpu(), is_ctc=True)
         return loss_ctc, cer_ctc
 
     def _calc_transducer_loss(
@@ -535,10 +628,7 @@ class ESPnetASRModel(AbsESPnetModel):
 
         """
         decoder_in, target, t_len, u_len = get_transducer_task_io(
-            labels,
-            encoder_out_lens,
-            ignore_id=self.ignore_id,
-            blank_id=self.blank_id,
+            labels, encoder_out_lens, ignore_id=self.ignore_id, blank_id=self.blank_id,
         )
 
         self.decoder.set_device(encoder_out.device)
@@ -548,12 +638,7 @@ class ESPnetASRModel(AbsESPnetModel):
             encoder_out.unsqueeze(2), decoder_out.unsqueeze(1)
         )
 
-        loss_transducer = self.criterion_transducer(
-            joint_out,
-            target,
-            t_len,
-            u_len,
-        )
+        loss_transducer = self.criterion_transducer(joint_out, target, t_len, u_len,)
 
         cer_transducer, wer_transducer = None, None
         if not self.training and self.error_calculator_trans is not None:

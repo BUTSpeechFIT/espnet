@@ -39,6 +39,8 @@ dumpdir=dump         # Directory to dump features.
 datadir=data
 expdir=exp           # Directory to save experiments.
 python=python3       # Specify python to execute espnet commands.
+copy_feats_to_dir="" # path to dir that has faster access to the GPU machine.
+                     # eg: /tmp or /mnt/ssd, where speech feats will be copied
 
 # Data preparation related
 local_data_opts= # The options given to local/data.sh.
@@ -63,6 +65,7 @@ sos_eos="<sos/eos>" # sos and eos symbole
 bpe_input_sentence_size=100000000 # Size of input sentence for BPE.
 bpe_nlsyms=         # non-linguistic symbols list, separated by a comma, for BPE
 bpe_char_cover=1.0  # character coverage when modeling BPE
+token_listdir=      # Path to directory of tokenizer model and vocab.
 
 # Ngram model related
 use_ngram=false
@@ -95,6 +98,7 @@ pretrained_model=              # Pretrained model to load
 ignore_init_mismatch=false      # Ignore initial mismatch
 feats_normalize=global_mvn # Normalizaton layer type.
 num_splits_asr=1           # Number of splitting for lm corpus.
+multilingual_mode=false    # multilingual mode
 
 # Upload model related
 hf_repo=
@@ -145,7 +149,7 @@ local_score_opts=          # The options given to local/score.sh.
 asr_speech_fold_length=800 # fold_length for speech data during ASR training.
 asr_text_fold_length=150   # fold_length for text data during ASR training.
 lm_fold_length=150         # fold_length for LM training.
-token_listdir=
+
 
 help_message=$(cat << EOF
 Usage: $0 --train-set "<train_set_name>" --valid-set "<valid_set_name>" --test_sets "<test_set_names>"
@@ -167,6 +171,7 @@ Options:
     --dumpdir        # Directory to dump features (default="${dumpdir}").
     --expdir         # Directory to save experiments (default="${expdir}").
     --python         # Specify python to execute espnet commands (default="${python}").
+    --copy_feats_to_dir     # path to dir that has faster access to the GPU machine. eg: /tmp or /mnt/ssd, where speech feats will be copied (default="")
 
     # Data preparation related
     --local_data_opts # The options given to local/data.sh (default="${local_data_opts}").
@@ -191,6 +196,9 @@ Options:
     --bpe_input_sentence_size # Size of input sentence for BPE (default="${bpe_input_sentence_size}").
     --bpe_nlsyms              # Non-linguistic symbol list for sentencepiece, separated by a comma. (default="${bpe_nlsyms}").
     --bpe_char_cover          # Character coverage when modeling BPE (default="${bpe_char_cover}").
+    --token_listdir           # Path to token_listdir. By default it will be determined
+                              # automatically based on above tokenization related options.
+                              # (default=)
 
     # Language model related
     --lm_tag          # Suffix to the result dir for language model training (default="${lm_tag}").
@@ -218,6 +226,8 @@ Options:
     --ignore_init_mismatch=      # Ignore mismatch parameter init with pretrained model (default="${ignore_init_mismatch}").
     --feats_normalize  # Normalizaton layer type (default="${feats_normalize}").
     --num_splits_asr   # Number of splitting for lm corpus  (default="${num_splits_asr}").
+    --multilingual_mode # true or false, (default:false).
+                        # true in case each langauage has specific vocab
 
     # Decoding related
     --inference_tag       # Suffix to the result dir for decoding (default="${inference_tag}").
@@ -249,7 +259,6 @@ Options:
     --asr_speech_fold_length # fold_length for speech data during ASR training (default="${asr_speech_fold_length}").
     --asr_text_fold_length   # fold_length for text data during ASR training (default="${asr_text_fold_length}").
     --lm_fold_length         # fold_length for LM training (default="${lm_fold_length}").
-    --token_listdir
 EOF
 )
 
@@ -297,15 +306,14 @@ fi
 # Use the text of the 1st evaldir if lm_test is not specified
 [ -z "${lm_test_text}" ] && lm_test_text="${data_feats}/${test_sets%% *}/text"
 
-if [ -z "${token_listdir}" ]; then
-    # Check tokenization type
+# Check tokenization type
+if [ -z ${token_listdir} ]; then
     if [ "${lang}" != noinfo ]; then
         token_listdir=${datadir}/${lang}_token_list
     else
         token_listdir=${datadir}/token_list
     fi
 fi
-
 bpedir="${token_listdir}/bpe_${bpemode}${nbpe}"
 bpeprefix="${bpedir}"/bpe
 bpemodel="${bpeprefix}".model
@@ -575,7 +583,6 @@ if ! "${skip_data_prep}"; then
             exit 2
         fi
     fi
-
 
     if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         log "Stage 4: Remove long/short data: ${data_feats}/org -> ${data_feats}"
@@ -964,6 +971,13 @@ if ! "${skip_train}"; then
         # shellcheck disable=SC2086
         utils/split_scp.pl "${key_file}" ${split_scps}
 
+        if [ "${multilingual_mode}" == "true" ]; then
+            # need extra options for collect_stats
+            _opts+="--train_data_path_and_name_and_type ${_asr_train_dir}/lid.scp,lid,text "
+            _opts+="--valid_data_path_and_name_and_type ${_asr_valid_dir}/lid.scp,lid,text "
+            _opts+="--input_token_list_ftype token_flist "
+        fi
+
         # 2. Generate run.sh
         log "Generate '${asr_stats_dir}/run.sh'. You can resume the process from stage 10 using this script"
         mkdir -p "${asr_stats_dir}"; echo "${run_args} --stage 10 \"\$@\"; exit \$?" > "${asr_stats_dir}/run.sh"; chmod +x "${asr_stats_dir}/run.sh"
@@ -1083,6 +1097,13 @@ if ! "${skip_train}"; then
             _opts+="--train_shape_file ${asr_stats_dir}/train/text_shape.${token_type} "
         fi
 
+        if [ "${multilingual_mode}" == "true" ]; then
+            # need extra options for collect_stats
+            _opts+="--train_data_path_and_name_and_type ${_asr_train_dir}/lid.scp,lid,text "
+            _opts+="--valid_data_path_and_name_and_type ${_asr_valid_dir}/lid.scp,lid,text "
+            _opts+="--input_token_list_ftype token_flist "
+        fi
+
         log "Generate '${asr_exp}/run.sh'. You can resume the process from stage 11 using this script"
         mkdir -p "${asr_exp}"; echo "${run_args} --stage 11 \"\$@\"; exit \$?" > "${asr_exp}/run.sh"; chmod +x "${asr_exp}/run.sh"
 
@@ -1121,7 +1142,7 @@ if ! "${skip_train}"; then
                 --fold_length "${_fold_length}" \
                 --fold_length "${asr_text_fold_length}" \
                 --output_dir "${asr_exp}" \
-                --copy_feats_to_dir "/mnt/ssd" \
+                --copy_feats_to_dir ${copy_feats_to_dir} \
                 ${_opts} ${asr_args}
 
     fi

@@ -73,6 +73,10 @@ class FoldedBatchSampler(AbsSampler):
         else:
             category2utt["default_category"] = keys
 
+        # we need this as it will be accessed in build_iter() and eventually
+        # passed to the model where we will access the category ID of the
+        # current batch
+        self.batch_categories = []  # empty list in case utt2category_file is None
         self.batch_list = []
         for d, v in category2utt.items():
             category_keys = v
@@ -138,6 +142,8 @@ class FoldedBatchSampler(AbsSampler):
                     f"sort_batch must be ascending or descending: {sort_batch}"
                 )
             self.batch_list.extend(cur_batch_list)
+            if utt2category_file is not None:
+                self.batch_categories.extend([d] * len(cur_batch_list))
 
     def __repr__(self):
         return (
