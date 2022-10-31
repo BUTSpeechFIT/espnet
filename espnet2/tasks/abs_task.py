@@ -294,11 +294,19 @@ class AbsTask(ABC):
             "--copy_feats_to_dir",
             default=None,
             type=str_or_none,
+            nargs='?',
             help="Copies input feats (eg: fbank ark files) to the given dir, \
 and updates the path in feats.scp, train_data_path_and_name_and_type. \
 This should avoid reading from disk server every time and thus prevent \
 any disk IO bottlenecks.",
         )
+        group.add_argument(
+            "--recopy",
+            default=False,
+            action="store_true",
+            help="Recopies the feats to dir, even if they are present"
+        )
+
         group.add_argument(
             "--safe_gpu",
             action="store_true",
@@ -903,17 +911,17 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
                 stime = time()
                 for ark_base, (src_path, tgt_path) in uniq_ark.items():
                     # one ark file contains feats to many utts
-                    if not os.path.exists(new_ark_path):
+                    if not os.path.exists(new_ark_path) and args.recopy is False:
                         shutil.copyfile(src_path, tgt_path)
                         logging.info(
-                            "Copied: {:s} - {:3d}/{:3d}".format(
-                                ark_base, n_copied, len(uniq_ark)
+                            "Copied: {:s} -> {:s} - {:3d}/{:3d}".format(
+                                src_path, tgt_path, n_copied, len(uniq_ark)
                             )
                         )
                     else:
                         logging.info(
                             "{:s} already present. Not copying it again.".format(
-                                ark_base
+                                tgt_path
                             )
                         )
                     n_copied += 1
