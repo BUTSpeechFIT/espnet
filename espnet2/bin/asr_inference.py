@@ -30,6 +30,7 @@ from espnet2.asr.transducer.beam_search_transducer import (
 )
 from espnet2.asr.transducer.beam_search_transducer import Hypothesis as TransHypothesis
 from espnet2.fileio.datadir_writer import DatadirWriter
+from espnet2.fileio.read_text import read_2column_text
 from espnet2.tasks.asr import ASRTask
 from espnet2.tasks.enh_s2t import EnhS2TTask
 from espnet2.tasks.lm import LMTask
@@ -79,6 +80,7 @@ class Speech2Text:
         nbest: int = 1,
         streaming: bool = False,
         enh_s2t_task: bool = False,
+        lid: Union[str, None] = None,
     ):
         assert check_argument_types()
 
@@ -103,14 +105,24 @@ class Speech2Text:
             )
         asr_model.to(dtype=getattr(torch, dtype)).eval()
 
+        if asr_model.is_multilingual:
+            assert lid != None, "The trained ASR model is multilingual with language specific vocab. Specify the language with `lid` parameter."
+            assert lid in asr_model.vocab_size, f"Lang ID (lid): {lid} is not present in choosen ASR model which contains the following lids: {asr_model.vocab_size.keys()}"
+
+        self.lid = lid
         decoder = asr_model.decoder
 
-        ctc = CTCPrefixScorer(ctc=asr_model.ctc, eos=asr_model.eos)
-        token_list = asr_model.token_list
+        if lid is not None:
+            token_list = asr_model.token_list[lid]
+            ctc = CTCPrefixScorer(ctc=asr_model.ctc[lid], eos=asr_model.eos[lid])
+            decoder.embed = decoder.embed[lid]
+            decoder.output_layer = decoder.output_layer[lid]
+        else:
+            token_list = asr_model.token_list
+            ctc = CTCPrefixScorer(ctc=asr_model.ctc, eos=asr_model.eos)
+
         scorers.update(
-            decoder=decoder,
-            ctc=ctc,
-            length_bonus=LengthBonus(len(token_list)),
+            decoder=decoder, ctc=ctc, length_bonus=LengthBonus(len(token_list)),
         )
 
         # 2. Build Language model
@@ -159,13 +171,12 @@ class Speech2Text:
                 beam_size=beam_size,
                 weights=weights,
                 scorers=scorers,
-                sos=asr_model.sos,
-                eos=asr_model.eos,
+                sos=asr_model.sos if lid is None else asr_model.sos[lid],
+                eos=asr_model.eos if lid is None else asr_model.eos[lid],
                 vocab_size=len(token_list),
                 token_list=token_list,
                 pre_beam_score_key=None if ctc_weight == 1.0 else "full",
             )
-
             # TODO(karita): make all scorers batchfied
             if batch_size == 1:
                 non_batch = [
@@ -201,6 +212,10 @@ class Speech2Text:
             token_type = asr_train_args.token_type
         if bpemodel is None:
             bpemodel = asr_train_args.bpemodel
+            if lid:
+                lid2bpe = read_2column_text(bpemodel)
+                assert lid in lid2bpe, f"Lang ID {lid} not present in bpe flist {bpemodel}"
+                bpemodel = lid2bpe[lid]
 
         if token_type is None:
             tokenizer = None
@@ -228,7 +243,7 @@ class Speech2Text:
 
     @torch.no_grad()
     def __call__(
-        self, speech: Union[torch.Tensor, np.ndarray]
+            self, speech: Union[torch.Tensor, np.ndarray], lid: Union[str, None]=None,
     ) -> List[
         Tuple[
             Optional[str],
@@ -259,7 +274,6 @@ class Speech2Text:
 
         # a. To device
         batch = to_device(batch, device=self.device)
-
         # b. Forward Encoder
         enc, _ = self.asr_model.encode(**batch)
         if isinstance(enc, tuple):
@@ -304,8 +318,7 @@ class Speech2Text:
 
     @staticmethod
     def from_pretrained(
-        model_tag: Optional[str] = None,
-        **kwargs: Optional[Any],
+        model_tag: Optional[str] = None, **kwargs: Optional[Any],
     ):
         """Build Speech2Text instance from the pretrained model.
 
@@ -365,6 +378,7 @@ def inference(
     transducer_conf: Optional[dict],
     streaming: bool,
     enh_s2t_task: bool,
+    lid: Union[str, None] = None,
 ):
     assert check_argument_types()
     if batch_size > 1:
@@ -409,10 +423,10 @@ def inference(
         nbest=nbest,
         streaming=streaming,
         enh_s2t_task=enh_s2t_task,
+        lid=lid,
     )
     speech2text = Speech2Text.from_pretrained(
-        model_tag=model_tag,
-        **speech2text_kwargs,
+        model_tag=model_tag, **speech2text_kwargs,
     )
 
     # 3. Build data-iterator
@@ -427,7 +441,6 @@ def inference(
         allow_variable_data_keys=allow_variable_data_keys,
         inference=True,
     )
-
     # 7 .Start for-loop
     # FIXME(kamo): The output format should be discussed about
     with DatadirWriter(output_dir) as writer:
@@ -440,7 +453,7 @@ def inference(
 
             # N-best list of (text, token, token_int, hyp_object)
             try:
-                results = speech2text(**batch)
+                results = speech2text(**batch, lid=lid)
             except TooShortUttError as e:
                 logging.warning(f"Utterance {keys} {e}")
                 hyp = Hypothesis(score=0.0, scores={}, states={}, yseq=[])
@@ -479,10 +492,7 @@ def get_parser():
 
     parser.add_argument("--output_dir", type=str, required=True)
     parser.add_argument(
-        "--ngpu",
-        type=int,
-        default=0,
-        help="The number of gpus. 0 indicates CPU mode",
+        "--ngpu", type=int, default=0, help="The number of gpus. 0 indicates CPU mode",
     )
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
     parser.add_argument(
@@ -510,39 +520,29 @@ def get_parser():
 
     group = parser.add_argument_group("The model configuration related")
     group.add_argument(
-        "--asr_train_config",
-        type=str,
-        help="ASR training configuration",
+        "--asr_train_config", type=str, help="ASR training configuration",
     )
     group.add_argument(
-        "--asr_model_file",
-        type=str,
-        help="ASR model parameter file",
+        "--asr_model_file", type=str, help="ASR model parameter file",
     )
     group.add_argument(
-        "--lm_train_config",
-        type=str,
-        help="LM training configuration",
+        "--lid", type=str_or_none, default=None,
+        help="Language ID incase the model is trained in multilingual fashion (lang-specific vocab)"
     )
     group.add_argument(
-        "--lm_file",
-        type=str,
-        help="LM parameter file",
+        "--lm_train_config", type=str, help="LM training configuration",
     )
     group.add_argument(
-        "--word_lm_train_config",
-        type=str,
-        help="Word LM training configuration",
+        "--lm_file", type=str, help="LM parameter file",
     )
     group.add_argument(
-        "--word_lm_file",
-        type=str,
-        help="Word LM parameter file",
+        "--word_lm_train_config", type=str, help="Word LM training configuration",
     )
     group.add_argument(
-        "--ngram_file",
-        type=str,
-        help="N-gram parameter file",
+        "--word_lm_file", type=str, help="Word LM parameter file",
+    )
+    group.add_argument(
+        "--ngram_file", type=str, help="N-gram parameter file",
     )
     group.add_argument(
         "--model_tag",
@@ -559,10 +559,7 @@ def get_parser():
 
     group = parser.add_argument_group("Beam-search related")
     group.add_argument(
-        "--batch_size",
-        type=int,
-        default=1,
-        help="The batch size for inference",
+        "--batch_size", type=int, default=1, help="The batch size for inference",
     )
     group.add_argument("--nbest", type=int, default=1, help="Output N-best hypotheses")
     group.add_argument("--beam_size", type=int, default=20, help="Beam size")
@@ -585,10 +582,7 @@ def get_parser():
         help="Input length ratio to obtain min output length",
     )
     group.add_argument(
-        "--ctc_weight",
-        type=float,
-        default=0.5,
-        help="CTC weight in joint decoding",
+        "--ctc_weight", type=float, default=0.5, help="CTC weight in joint decoding",
     )
     group.add_argument("--lm_weight", type=float, default=1.0, help="RNNLM weight")
     group.add_argument("--ngram_weight", type=float, default=0.9, help="ngram weight")

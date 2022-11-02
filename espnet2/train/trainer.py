@@ -773,6 +773,9 @@ class Trainer:
             if isinstance(ids[0], list):
                 utt_ids = ids[0]
                 lid = ids[1]
+                batch["lid"] = lid
+            else:
+                utt_ids = ids
 
             assert len(next(iter(batch.values()))) == len(utt_ids), (
                 len(next(iter(batch.values()))),
@@ -780,7 +783,6 @@ class Trainer:
             )
 
             batch["utt_id"] = utt_ids
-            batch["lid"] = lid
 
             batch = to_device(batch, "cuda" if ngpu > 0 else "cpu")
             if no_forward_run:

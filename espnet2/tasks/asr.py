@@ -413,6 +413,13 @@ class ASRTask(AbsTask):
 
         elif isinstance(args.token_list, (tuple, list)):
             token_list = list(args.token_list)
+        elif isinstance(args.token_list, dict):
+            # This happens during inference when the model is a multilingual with
+            # specific vocabulary
+            token_list = args.token_list
+            vocab_size = {}
+            for lid, vocab in token_list.items():
+                vocab_size[lid] = len(vocab)
         else:
             raise RuntimeError("token_list must be str or list")
 
