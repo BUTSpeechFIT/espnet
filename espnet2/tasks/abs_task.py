@@ -930,6 +930,17 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
                     "Copying done in {:.2f} minutes".format((time() - stime) / 60.0)
                 )
                 new_feats_scp_file = sub_dir / "feats.scp"
+
+                if Path(set_path.parent, "utt2category").exists():
+                    utt2category_file = str(Path(set_path.parent, "utt2category"))
+                    tgt_utt2cat_file = sub_dir / "utt2category"
+                    shutil.copyfile(utt2category_file, str(tgt_utt2cat_file))
+                    logging.info(
+                        "Copied: {:s} -> {:s}".format(
+                            utt2category_file, str(tgt_utt2cat_file)
+                        )
+                    )
+
                 with open(new_feats_scp_file, "w") as fpw:
                     fpw.write("\n".join(new_data) + "\n")
 
