@@ -150,6 +150,8 @@ asr_speech_fold_length=800 # fold_length for speech data during ASR training.
 asr_text_fold_length=150   # fold_length for text data during ASR training.
 lm_fold_length=150         # fold_length for LM training.
 
+# multilingual specific arguments
+utt2cat=false
 
 help_message=$(cat << EOF
 Usage: $0 --train-set "<train_set_name>" --valid-set "<valid_set_name>" --test_sets "<test_set_names>"
@@ -564,12 +566,12 @@ if ! "${skip_data_prep}"; then
                     _suf=""
                 fi
                 # Generate dummy wav.scp to avoid error by copy_data_dir.sh
-                <${datadir}/"${dset}"/cmvn.scp awk ' { print($1,"<DUMMY>") }' > ${datadir}/"${dset}"/wav.scp
+                #<${datadir}/"${dset}"/cmvn.scp awk ' { print($1,"<DUMMY>") }' > ${datadir}/"${dset}"/wav.scp
                 utils/copy_data_dir.sh --validate_opts --non-print ${datadir}/"${dset}" "${data_feats}${_suf}/${dset}"
 
                 # Derive the the frame length and feature dimension
                 _nj=$(min "${nj}" "$(<"${data_feats}${_suf}/${dset}/utt2spk" wc -l)")
-                scripts/feats/feat_to_shape.sh --nj "${_nj}" --cmd "${train_cmd}" \
+                scripts/feats/feat_to_shape.sh --nj "${_nj}" --cmd "${cpu_cmd}" \
                     "${data_feats}${_suf}/${dset}/feats.scp" "${data_feats}${_suf}/${dset}/feats_shape"
 
                 pyscripts/feats/feat-to-shape.py "scp:head -n 1 ${data_feats}${_suf}/${dset}/feats.scp |" - | \
@@ -723,6 +725,11 @@ else
     log "Skip the stages for data preparation"
 fi
 
+# create utt2category symlink to lid.scp to create batches of same language during training
+#if [ ${utt2cat} = true ]; then
+#    python3 lid_scp.py --bpedir ${bpedir} \
+#                       --dump_dirs ${data_feats}/${train_set} ${data_feats}/${valid_set} ${data_feats}/${test_sets} 
+#if
 
 # ========================== Data preparation is done here. ==========================
 
@@ -989,7 +996,7 @@ if ! "${skip_train}"; then
         #       but it's used only for deciding the sample ids.
 
         # shellcheck disable=SC2086
-        ${train_cmd} JOB=1:"${_nj}" "${_logdir}"/stats.JOB.log \
+        ${cpu_cmd} JOB=1:"${_nj}" "${_logdir}"/stats.JOB.log \
             ${python} -m espnet2.bin.asr_train \
                 --collect_stats true \
                 --use_preprocessor true \
