@@ -3,18 +3,17 @@ import argparse
 import functools
 import logging
 import os
-import sys
-from glob import glob
-import shutil
 import random
+import shutil
 import string
-from time import time
-
-from distutils.version import LooseVersion
-
+import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
+from distutils.version import LooseVersion
+from glob import glob
 from pathlib import Path, PurePath
+from time import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import humanfriendly
@@ -24,17 +23,20 @@ import torch.multiprocessing
 import torch.nn
 import torch.optim
 import yaml
+from espnet import __version__
+from espnet.utils.cli_utils import get_commandline_args
 from torch.utils.data import DataLoader
 from typeguard import check_argument_types, check_return_type
 
-from espnet import __version__
+from espnet2.fileio.read_text import read_2column_text
 from espnet2.iterators.abs_iter_factory import AbsIterFactory
 from espnet2.iterators.chunk_iter_factory import ChunkIterFactory
 from espnet2.iterators.multiple_iter_factory import MultipleIterFactory
 from espnet2.iterators.sequence_iter_factory import SequenceIterFactory
 from espnet2.main_funcs.collect_stats import collect_stats
 from espnet2.optimizers.sgd import SGD
-from espnet2.samplers.build_batch_sampler import BATCH_TYPES, build_batch_sampler
+from espnet2.samplers.build_batch_sampler import (BATCH_TYPES,
+                                                  build_batch_sampler)
 from espnet2.samplers.unsorted_batch_sampler import UnsortedBatchSampler
 from espnet2.schedulers.noam_lr import NoamLR
 from espnet2.schedulers.warmup_lr import WarmupLR
@@ -45,31 +47,20 @@ from espnet2.torch_utils.set_all_random_seed import set_all_random_seed
 from espnet2.train.abs_espnet_model import AbsESPnetModel
 from espnet2.train.class_choices import ClassChoices
 from espnet2.train.dataset import DATA_TYPES, AbsDataset, ESPnetDataset
-from espnet2.train.distributed_utils import (
-    DistributedOption,
-    free_port,
-    get_master_port,
-    get_node_rank,
-    get_num_nodes,
-    resolve_distributed_mode,
-)
+from espnet2.train.distributed_utils import (DistributedOption, free_port,
+                                             get_master_port, get_node_rank,
+                                             get_num_nodes,
+                                             resolve_distributed_mode)
 from espnet2.train.iterable_dataset import IterableESPnetDataset
 from espnet2.train.trainer import Trainer
 from espnet2.utils import config_argparse
 from espnet2.utils.build_dataclass import build_dataclass
 from espnet2.utils.get_default_kwargs import get_default_kwargs
 from espnet2.utils.nested_dict_action import NestedDictAction
-from espnet2.utils.types import (
-    humanfriendly_parse_size_or_none,
-    int_or_none,
-    str2bool,
-    str2triple_str,
-    str_or_int,
-    str_or_none,
-)
+from espnet2.utils.types import (humanfriendly_parse_size_or_none, int_or_none,
+                                 str2bool, str2triple_str, str_or_int,
+                                 str_or_none)
 from espnet2.utils.yaml_no_alias_safe_dump import yaml_no_alias_safe_dump
-from espnet.utils.cli_utils import get_commandline_args
-from espnet2.fileio.read_text import read_2column_text
 
 try:
     import wandb
@@ -881,8 +872,9 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
                 sub_dir.mkdir(parents=True, exist_ok=True)
                 logging.info("Created directory {:s}".format(str(sub_dir)))
 
-                rand_str = "".join(random.choices(string.ascii_letters, k=8))
-                lock_fname = sub_dir / f"read_lock_{rand_str}"
+                now = datetime.now()
+                time_str = now.strftime("%H%M%S_%f")
+                lock_fname = sub_dir / f"read_lock_{time_str}"
                 open(lock_fname, "w").close()
                 args.local_feat_dirs[sub_dir] = lock_fname
                 logging.info("Created read_lock file: {:s}".format(str(lock_fname)))
