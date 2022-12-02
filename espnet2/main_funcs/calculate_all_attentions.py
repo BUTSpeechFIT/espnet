@@ -39,9 +39,9 @@ def calculate_all_attentions(
 
     """
     bs = len(next(iter(batch.values())))
-    assert all(len(v) == bs for v in batch.values()), {
-        k: v.shape for k, v in batch.items()
-    }
+    for k, v in batch.items():
+        if k != "lid":
+            assert len(v) == bs, {k, len(v)}
 
     # 1. Register forward_hook fn to save the output from specific layers
     outputs = {}
