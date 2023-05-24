@@ -35,8 +35,7 @@ from espnet2.iterators.multiple_iter_factory import MultipleIterFactory
 from espnet2.iterators.sequence_iter_factory import SequenceIterFactory
 from espnet2.main_funcs.collect_stats import collect_stats
 from espnet2.optimizers.sgd import SGD
-from espnet2.samplers.build_batch_sampler import (BATCH_TYPES,
-                                                  build_batch_sampler)
+from espnet2.samplers.build_batch_sampler import BATCH_TYPES, build_batch_sampler
 from espnet2.samplers.unsorted_batch_sampler import UnsortedBatchSampler
 from espnet2.schedulers.noam_lr import NoamLR
 from espnet2.schedulers.warmup_lr import WarmupLR
@@ -47,19 +46,28 @@ from espnet2.torch_utils.set_all_random_seed import set_all_random_seed
 from espnet2.train.abs_espnet_model import AbsESPnetModel
 from espnet2.train.class_choices import ClassChoices
 from espnet2.train.dataset import DATA_TYPES, AbsDataset, ESPnetDataset
-from espnet2.train.distributed_utils import (DistributedOption, free_port,
-                                             get_master_port, get_node_rank,
-                                             get_num_nodes,
-                                             resolve_distributed_mode)
+from espnet2.train.distributed_utils import (
+    DistributedOption,
+    free_port,
+    get_master_port,
+    get_node_rank,
+    get_num_nodes,
+    resolve_distributed_mode,
+)
 from espnet2.train.iterable_dataset import IterableESPnetDataset
 from espnet2.train.trainer import Trainer
 from espnet2.utils import config_argparse
 from espnet2.utils.build_dataclass import build_dataclass
 from espnet2.utils.get_default_kwargs import get_default_kwargs
 from espnet2.utils.nested_dict_action import NestedDictAction
-from espnet2.utils.types import (humanfriendly_parse_size_or_none, int_or_none,
-                                 str2bool, str2triple_str, str_or_int,
-                                 str_or_none)
+from espnet2.utils.types import (
+    humanfriendly_parse_size_or_none,
+    int_or_none,
+    str2bool,
+    str2triple_str,
+    str_or_int,
+    str_or_none,
+)
 from espnet2.utils.yaml_no_alias_safe_dump import yaml_no_alias_safe_dump
 
 try:
@@ -87,7 +95,9 @@ optim_classes = dict(
 )
 if LooseVersion(torch.__version__) >= LooseVersion("1.10.0"):
     # From 1.10.0, RAdam is officially supported
-    optim_classes.update(radam=torch.optim.RAdam,)
+    optim_classes.update(
+        radam=torch.optim.RAdam,
+    )
 try:
     import torch_optimizer
 
@@ -107,7 +117,9 @@ try:
     )
     if LooseVersion(torch_optimizer.__version__) < LooseVersion("0.2.0"):
         # From 0.2.0, RAdam is dropped
-        optim_classes.update(radam=torch_optimizer.RAdam,)
+        optim_classes.update(
+            radam=torch_optimizer.RAdam,
+        )
     del torch_optimizer
 except ImportError:
     pass
@@ -254,7 +266,8 @@ class AbsTask(ABC):
         assert check_argument_types()
 
         class ArgumentDefaultsRawTextHelpFormatter(
-            argparse.RawTextHelpFormatter, argparse.ArgumentDefaultsHelpFormatter,
+            argparse.RawTextHelpFormatter,
+            argparse.ArgumentDefaultsHelpFormatter,
         ):
             pass
 
@@ -285,7 +298,7 @@ class AbsTask(ABC):
             "--copy_feats_to_dir",
             default=None,
             type=str_or_none,
-            nargs='?',
+            nargs="?",
             help="Copies input feats (eg: fbank ark files) to the given dir, \
 and updates the path in feats.scp, train_data_path_and_name_and_type. \
 This should avoid reading from disk server every time and thus prevent \
@@ -295,7 +308,7 @@ any disk IO bottlenecks.",
             "--recopy",
             default=False,
             action="store_true",
-            help="Recopies the feats to dir, even if they are present"
+            help="Recopies the feats to dir, even if they are present",
         )
 
         group.add_argument(
@@ -304,6 +317,15 @@ any disk IO bottlenecks.",
             help="Use safe_gpu package to acquire free GPUs and set CUDA_VISIBLE_DEVICES.\
 When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.",
         )
+        group.add_argument(
+            "--langs_in_token2int",
+            default=[],
+            type=str,
+            help="Lang IDs that were used in tokens.txt. This arg is mandatory wen training"
+            + "multilingual model with a shared vocabulary. The vocab also contains the "
+            + "lang IDs as tokens. For example: [cs],[en],[fr],[hi],[te],[yo]",
+        )
+
         group.add_argument(
             "--print_config",
             action="store_true",
@@ -355,7 +377,10 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
 
         group = parser.add_argument_group("distributed training related")
         group.add_argument(
-            "--dist_backend", default="nccl", type=str, help="distributed backend",
+            "--dist_backend",
+            default="nccl",
+            type=str,
+            help="distributed backend",
         )
         group.add_argument(
             "--dist_init_method",
@@ -593,19 +618,34 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
             help="Enable tensorboard logging",
         )
         group.add_argument(
-            "--use_wandb", type=str2bool, default=False, help="Enable wandb logging",
+            "--use_wandb",
+            type=str2bool,
+            default=False,
+            help="Enable wandb logging",
         )
         group.add_argument(
-            "--wandb_project", type=str, default=None, help="Specify wandb project",
+            "--wandb_project",
+            type=str,
+            default=None,
+            help="Specify wandb project",
         )
         group.add_argument(
-            "--wandb_id", type=str, default=None, help="Specify wandb id",
+            "--wandb_id",
+            type=str,
+            default=None,
+            help="Specify wandb id",
         )
         group.add_argument(
-            "--wandb_entity", type=str, default=None, help="Specify wandb entity",
+            "--wandb_entity",
+            type=str,
+            default=None,
+            help="Specify wandb entity",
         )
         group.add_argument(
-            "--wandb_name", type=str, default=None, help="Specify wandb run name",
+            "--wandb_name",
+            type=str,
+            default=None,
+            help="Specify wandb run name",
         )
         group.add_argument(
             "--wandb_model_log_interval",
@@ -649,7 +689,11 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
             help="Ignore size mismatch when loading pre-trained model",
         )
         group.add_argument(
-            "--freeze_param", type=str, default=[], nargs="*", help="Freeze parameters",
+            "--freeze_param",
+            type=str,
+            default=[],
+            nargs="*",
+            help="Freeze parameters",
         )
 
         group = parser.add_argument_group("BatchSampler related")
@@ -850,7 +894,7 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
 
     @classmethod
     def copy_feats_to_dir(cls, args: argparse.Namespace) -> None:
-        """Copies feats to the given dir (eg: /tmp in local machine
+        """Copies feats to the given dir (eg: /tmp/ in local machine
         or /mnt/ssd/), and updates the  path in feats.scp,
         train_data_path_and_name_and_type ..."""
 
@@ -890,7 +934,7 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
                 new_data = []
                 for utt_id, ark_line in data.items():
 
-                    src_ark_path, sfx = ark_line.split(":")
+                    src_ark_path, sfx = ark_line.rsplit(":", maxsplit=1)
                     ark_base = PurePath(src_ark_path).name
 
                     new_ark_path = sub_dir / ark_base
@@ -903,11 +947,14 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
                 stime = time()
                 for ark_base, (src_path, tgt_path) in uniq_ark.items():
                     # one ark file contains feats to many utts
-                    if not os.path.exists(new_ark_path) and args.recopy is False:
+                    if (os.path.exists(new_ark_path) is False) or (args.recopy is True):
                         shutil.copyfile(src_path, tgt_path)
                         logging.info(
-                            "Copied: {:s} -> {:s} - {:3d}/{:3d}".format(
-                                src_path, tgt_path, n_copied, len(uniq_ark)
+                            "{:4d}/{:4d} Copied: {:s} -> {:s}".format(
+                                n_copied,
+                                len(uniq_ark),
+                                src_path,
+                                tgt_path,
                             )
                         )
                     else:
@@ -957,15 +1004,16 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
                     logging.info("Removed local feat dir : " + str(local_feat_dir))
                 else:
                     logging.info(
-                        "Not removing local feat dir {:s}, as other ({:d}) \
-                    read_lock files were found.".format(
+                        "Not removing local feat dir {:s}. {:d} other read_lock file(s) were found.".format(
                             str(local_feat_dir), len(lock_files)
                         )
                     )
 
     @classmethod
     def build_optimizers(
-        cls, args: argparse.Namespace, model: torch.nn.Module,
+        cls,
+        args: argparse.Namespace,
+        model: torch.nn.Module,
     ) -> List[torch.optim.Optimizer]:
         if cls.num_optimizers != 1:
             raise RuntimeError(
@@ -1176,7 +1224,9 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
                 local_args.ngpu = 1
 
                 process = mp.Process(
-                    target=cls.main_worker, args=(local_args,), daemon=False,
+                    target=cls.main_worker,
+                    args=(local_args,),
+                    daemon=False,
                 )
                 process.start()
                 processes.append(process)
@@ -1358,14 +1408,20 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
             # 7. Build iterator factories
             if args.multiple_iterator:
                 train_iter_factory = cls.build_multiple_iter_factory(
-                    args=args, distributed_option=distributed_option, mode="train",
+                    args=args,
+                    distributed_option=distributed_option,
+                    mode="train",
                 )
             else:
                 train_iter_factory = cls.build_iter_factory(
-                    args=args, distributed_option=distributed_option, mode="train",
+                    args=args,
+                    distributed_option=distributed_option,
+                    mode="train",
                 )
             valid_iter_factory = cls.build_iter_factory(
-                args=args, distributed_option=distributed_option, mode="valid",
+                args=args,
+                distributed_option=distributed_option,
+                mode="valid",
             )
             if not args.use_matplotlib and args.num_att_plot != 0:
                 args.num_att_plot = 0
@@ -1373,7 +1429,9 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
 
             if args.num_att_plot != 0:
                 plot_attention_iter_factory = cls.build_iter_factory(
-                    args=args, distributed_option=distributed_option, mode="plot_att",
+                    args=args,
+                    distributed_option=distributed_option,
+                    mode="plot_att",
                 )
             else:
                 plot_attention_iter_factory = None
@@ -1441,7 +1499,10 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
 
     @classmethod
     def build_iter_options(
-        cls, args: argparse.Namespace, distributed_option: DistributedOption, mode: str,
+        cls,
+        args: argparse.Namespace,
+        distributed_option: DistributedOption,
+        mode: str,
     ):
         if mode == "train":
             preprocess_fn = cls.build_preprocess_fn(args, train=True)
@@ -1564,15 +1625,21 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
 
         if args.iterator_type == "sequence":
             return cls.build_sequence_iter_factory(
-                args=args, iter_options=iter_options, mode=mode,
+                args=args,
+                iter_options=iter_options,
+                mode=mode,
             )
         elif args.iterator_type == "chunk":
             return cls.build_chunk_iter_factory(
-                args=args, iter_options=iter_options, mode=mode,
+                args=args,
+                iter_options=iter_options,
+                mode=mode,
             )
         elif args.iterator_type == "task":
             return cls.build_task_iter_factory(
-                args=args, iter_options=iter_options, mode=mode,
+                args=args,
+                iter_options=iter_options,
+                mode=mode,
             )
         else:
             raise RuntimeError(f"Not supported: iterator_type={args.iterator_type}")
@@ -1657,7 +1724,10 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
 
     @classmethod
     def build_chunk_iter_factory(
-        cls, args: argparse.Namespace, iter_options: IteratorOptions, mode: str,
+        cls,
+        args: argparse.Namespace,
+        iter_options: IteratorOptions,
+        mode: str,
     ) -> AbsIterFactory:
         assert check_argument_types()
 
@@ -1727,7 +1797,10 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
     # NOTE(kamo): Not abstract class
     @classmethod
     def build_task_iter_factory(
-        cls, args: argparse.Namespace, iter_options: IteratorOptions, mode: str,
+        cls,
+        args: argparse.Namespace,
+        iter_options: IteratorOptions,
+        mode: str,
     ) -> AbsIterFactory:
         """Build task specific iterator factory
 
@@ -1879,7 +1952,10 @@ When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.
         )
 
         return DataLoader(
-            dataset=dataset, pin_memory=ngpu > 0, num_workers=num_workers, **kwargs,
+            dataset=dataset,
+            pin_memory=ngpu > 0,
+            num_workers=num_workers,
+            **kwargs,
         )
 
     # ~~~~~~~~~ The methods below are mainly used for inference ~~~~~~~~~

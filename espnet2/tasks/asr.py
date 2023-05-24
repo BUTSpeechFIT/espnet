@@ -1,46 +1,43 @@
 import argparse
 import logging
-from typing import Callable
-from typing import Collection
-from typing import Dict
-from typing import List
-from typing import Optional
-from typing import Tuple
+from typing import Callable, Collection, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-from typeguard import check_argument_types
-from typeguard import check_return_type
+from typeguard import check_argument_types, check_return_type
 
 from espnet2.asr.ctc import CTC
 from espnet2.asr.decoder.abs_decoder import AbsDecoder
 from espnet2.asr.decoder.mlm_decoder import MLMDecoder
 from espnet2.asr.decoder.rnn_decoder import RNNDecoder
 from espnet2.asr.decoder.transformer_decoder import (
-    DynamicConvolution2DTransformerDecoder,  # noqa: H301
-)
-from espnet2.asr.decoder.transformer_decoder import DynamicConvolutionTransformerDecoder
+    DynamicConvolution2DTransformerDecoder,
+)  # noqa: H301
 from espnet2.asr.decoder.transformer_decoder import (
-    LightweightConvolution2DTransformerDecoder,  # noqa: H301
-)
+    LightweightConvolution2DTransformerDecoder,
+)  # noqa: H301
 from espnet2.asr.decoder.transformer_decoder import (
-    LightweightConvolutionTransformerDecoder,  # noqa: H301
+    LightweightConvolutionTransformerDecoder,
+)  # noqa: H301
+from espnet2.asr.decoder.transformer_decoder import (
+    DynamicConvolutionTransformerDecoder,
+    TransformerDecoder,
 )
-from espnet2.asr.decoder.transformer_decoder import TransformerDecoder
 from espnet2.asr.encoder.abs_encoder import AbsEncoder
 from espnet2.asr.encoder.conformer_encoder import ConformerEncoder
+from espnet2.asr.encoder.contextual_block_conformer_encoder import (
+    ContextualBlockConformerEncoder,
+)  # noqa: H301
+from espnet2.asr.encoder.contextual_block_transformer_encoder import (
+    ContextualBlockTransformerEncoder,
+)  # noqa: H301
+from espnet2.asr.encoder.hubert_encoder import (
+    FairseqHubertEncoder,
+    FairseqHubertPretrainEncoder,
+)
 from espnet2.asr.encoder.longformer_encoder import LongformerEncoder
-
-from espnet2.asr.encoder.hubert_encoder import FairseqHubertEncoder
-from espnet2.asr.encoder.hubert_encoder import FairseqHubertPretrainEncoder
 from espnet2.asr.encoder.rnn_encoder import RNNEncoder
 from espnet2.asr.encoder.transformer_encoder import TransformerEncoder
-from espnet2.asr.encoder.contextual_block_transformer_encoder import (
-    ContextualBlockTransformerEncoder,  # noqa: H301
-)
-from espnet2.asr.encoder.contextual_block_conformer_encoder import (
-    ContextualBlockConformerEncoder,  # noqa: H301
-)
 from espnet2.asr.encoder.vgg_rnn_encoder import VGGRNNEncoder
 from espnet2.asr.encoder.wav2vec2_encoder import FairSeqWav2Vec2Encoder
 from espnet2.asr.espnet_model import ESPnetASRModel
@@ -52,8 +49,8 @@ from espnet2.asr.frontend.windowing import SlidingWindow
 from espnet2.asr.maskctc_model import MaskCTCModel
 from espnet2.asr.postencoder.abs_postencoder import AbsPostEncoder
 from espnet2.asr.postencoder.hugging_face_transformers_postencoder import (
-    HuggingFaceTransformersPostEncoder,  # noqa: H301
-)
+    HuggingFaceTransformersPostEncoder,
+)  # noqa: H301
 from espnet2.asr.preencoder.abs_preencoder import AbsPreEncoder
 from espnet2.asr.preencoder.linear import LinearProjection
 from espnet2.asr.preencoder.sinc import LightweightSincConvs
@@ -74,10 +71,7 @@ from espnet2.train.preprocessor import CommonPreprocessor
 from espnet2.train.trainer import Trainer
 from espnet2.utils.get_default_kwargs import get_default_kwargs
 from espnet2.utils.nested_dict_action import NestedDictAction
-from espnet2.utils.types import float_or_none
-from espnet2.utils.types import int_or_none
-from espnet2.utils.types import str2bool
-from espnet2.utils.types import str_or_none
+from espnet2.utils.types import float_or_none, int_or_none, str2bool, str_or_none
 
 frontend_choices = ClassChoices(
     name="frontend",
@@ -92,27 +86,38 @@ frontend_choices = ClassChoices(
 )
 specaug_choices = ClassChoices(
     name="specaug",
-    classes=dict(specaug=SpecAug,),
+    classes=dict(
+        specaug=SpecAug,
+    ),
     type_check=AbsSpecAug,
     default=None,
     optional=True,
 )
 normalize_choices = ClassChoices(
     "normalize",
-    classes=dict(global_mvn=GlobalMVN, utterance_mvn=UtteranceMVN,),
+    classes=dict(
+        global_mvn=GlobalMVN,
+        utterance_mvn=UtteranceMVN,
+    ),
     type_check=AbsNormalize,
     default="utterance_mvn",
     optional=True,
 )
 model_choices = ClassChoices(
     "model",
-    classes=dict(espnet=ESPnetASRModel, maskctc=MaskCTCModel,),
+    classes=dict(
+        espnet=ESPnetASRModel,
+        maskctc=MaskCTCModel,
+    ),
     type_check=AbsESPnetModel,
     default="espnet",
 )
 preencoder_choices = ClassChoices(
     name="preencoder",
-    classes=dict(sinc=LightweightSincConvs, linear=LinearProjection,),
+    classes=dict(
+        sinc=LightweightSincConvs,
+        linear=LinearProjection,
+    ),
     type_check=AbsPreEncoder,
     default=None,
     optional=True,
@@ -136,7 +141,9 @@ encoder_choices = ClassChoices(
 )
 postencoder_choices = ClassChoices(
     name="postencoder",
-    classes=dict(hugging_face_transformers=HuggingFaceTransformersPostEncoder,),
+    classes=dict(
+        hugging_face_transformers=HuggingFaceTransformersPostEncoder,
+    ),
     type_check=AbsPostEncoder,
     default=None,
     optional=True,
@@ -421,7 +428,7 @@ class ASRTask(AbsTask):
             for lid, vocab in token_list.items():
                 vocab_size[lid] = len(vocab)
         else:
-            raise RuntimeError("token_list must be str or list")
+            raise RuntimeError("token_list must be str or list or dict")
 
         if args.input_token_list_ftype == "token_list":
             vocab_size = len(token_list)
@@ -484,7 +491,11 @@ class ASRTask(AbsTask):
         decoder_class = decoder_choices.get_class(args.decoder)
 
         if args.decoder == "transducer":
-            decoder = decoder_class(vocab_size, embed_pad=0, **args.decoder_conf,)
+            decoder = decoder_class(
+                vocab_size,
+                embed_pad=0,
+                **args.decoder_conf,
+            )
 
             joint_network = JointNetwork(
                 vocab_size,
@@ -509,7 +520,7 @@ class ASRTask(AbsTask):
                 **args.ctc_conf,
             )
         else:
-            # dict of CTC - incase of multilingual model
+            # dict of CTC - incase of multilingual model with lang-specific vocab/embeddings
             ctc = torch.nn.ModuleDict()
             for lid, vsize in vocab_size.items():
                 ctc[lid] = CTC(

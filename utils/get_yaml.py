@@ -11,13 +11,28 @@ def get_parser():
     )
     parser.add_argument("inyaml")
     parser.add_argument(
-        "-attrs", nargs="+", type=str, help='foo.bar will access yaml.load(inyaml)["foo"]["bar"]',
-        default=["encoder_conf", "decoder_conf", "model_conf", "optim", "optim_conf", "bpemodel"]
+        "-attrs",
+        nargs="+",
+        type=str,
+        help='foo.bar will access yaml.load(inyaml)["foo"]["bar"]',
+        default=[
+            "encoder_conf",
+            "decoder_conf",
+            "model_conf",
+            "optim",
+            "optim_conf",
+            "bpemodel",
+            "batch_size",
+            "accum_grad",
+            "max_epoch",
+        ],
     )
     parser.add_argument(
-        "-extra", nargs="+", type=str,
+        "-extra",
+        nargs="+",
+        type=str,
         help="extra attributes apart from the default ones in -atts",
-        default=[]
+        default=[],
     )
     return parser
 
