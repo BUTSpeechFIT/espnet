@@ -30,8 +30,8 @@ tgt_lang=hi
 bpemodel=$(grep -E "^bpemodel:" "${st_config}" | awk -F": " '{print $NF}')
 bpedir=$(dirname ${bpemodel})
 
-
-for d in 0.3 ; do
+# d: is the CTC weight for joint decoding. higher weights result in worse results.
+for d in 0.1 0.3 ; do
     ./st.sh \
         --ngpu 0 \
         --inference_nj ${nj} \
