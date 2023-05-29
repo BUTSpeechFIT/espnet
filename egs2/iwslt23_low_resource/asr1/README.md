@@ -1,5 +1,5 @@
 
-# Recipe for training bi/multilingual ASR system
+# Recipe for training bi/multilingual Hindi-Marathi ASR system
 
 1. Data preparation - combining several Hindi, Marathi datasets
 
