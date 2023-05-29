@@ -64,7 +64,16 @@ class ESPnetASRModel(AbsESPnetModel):
         sym_space: str = "<space>",
         sym_blank: str = "<blank>",
         extract_feats_in_collect_stats: bool = True,
+        lid2int: Union[dict, None] = None,
     ):
+        """
+
+            Args:
+                vocab_size (int or dict): Integer in case of single vocab (mono or shared).
+                    Dict in case vocabulary is independent of each language.
+                token_list (list or dict): Same philosophy as above
+                lid2int (dict or None): Language ID to integer mapping, where the int must be from token2int, incase of shared vocabulary multilingual model.
+        """
         assert check_argument_types()
         assert 0.0 <= ctc_weight <= 1.0, ctc_weight
         assert 0.0 <= interctc_weight < 1.0, interctc_weight
@@ -91,6 +100,7 @@ class ESPnetASRModel(AbsESPnetModel):
         self.ctc_weight = ctc_weight
         self.interctc_weight = interctc_weight
         self.token_list = token_list.copy()
+        self.lid2int = lid2int
 
         self.frontend = frontend
         self.specaug = specaug
@@ -172,7 +182,7 @@ class ESPnetASRModel(AbsESPnetModel):
                 )
 
             if report_cer or report_wer:
-                if isinstance(token_list, int):
+                if isinstance(token_list, list):
                     self.error_calculator = ErrorCalculator(
                         token_list, sym_space, sym_blank, report_cer, report_wer
                     )
@@ -239,9 +249,7 @@ class ESPnetASRModel(AbsESPnetModel):
         loss_transducer, cer_transducer, wer_transducer = None, None, None
         stats = dict()
 
-        lid_sfx = ""
-        if lid:
-            lid_sfx = "_" + lid
+        lid_sfx = f"_{lid}" if lid else ""
 
         # 1. CTC branch
         if self.ctc_weight != 0.0:
@@ -249,16 +257,16 @@ class ESPnetASRModel(AbsESPnetModel):
                 encoder_out, encoder_out_lens, text, text_lengths, lid=lid
             )
 
-            # Collect CTC branch stats
-            stats["loss_ctc"] = loss_ctc.detach() if loss_ctc is not None else None
-            stats["cer_ctc"] = cer_ctc
-
             if lid:
                 # Collect CTC branch stats
                 stats["loss_ctc" + lid_sfx] = (
                     loss_ctc.detach() if loss_ctc is not None else None
                 )
                 stats["cer_ctc" + lid_sfx] = cer_ctc
+
+            # Collect CTC branch stats
+            stats["loss_ctc"] = loss_ctc.detach() if loss_ctc is not None else None
+            stats["cer_ctc"] = cer_ctc
 
         # Intermediate CTC (optional)
         loss_interctc = 0.0
@@ -285,6 +293,7 @@ class ESPnetASRModel(AbsESPnetModel):
             ) * loss_ctc + self.interctc_weight * loss_interctc
 
         if self.use_transducer_decoder:
+            # ToDo (kesiraju): multilingual mode
             # 2a. Transducer decoder branch
             (
                 loss_transducer,
@@ -320,11 +329,6 @@ class ESPnetASRModel(AbsESPnetModel):
                 loss = self.ctc_weight * loss_ctc + (1 - self.ctc_weight) * loss_att
 
             # Collect Attn branch stats
-            stats["loss_att"] = loss_att.detach() if loss_att is not None else None
-            stats["acc"] = acc_att
-            stats["cer"] = cer_att
-            stats["wer"] = wer_att
-
             if lid:
                 stats["loss_att" + lid_sfx] = (
                     loss_att.detach() if loss_att is not None else None
@@ -332,6 +336,11 @@ class ESPnetASRModel(AbsESPnetModel):
                 stats["acc" + lid_sfx] = acc_att
                 stats["cer" + lid_sfx] = cer_att
                 stats["wer" + lid_sfx] = wer_att
+
+            stats["loss_att"] = loss_att.detach() if loss_att is not None else None
+            stats["acc"] = acc_att
+            stats["cer"] = cer_att
+            stats["wer"] = wer_att
 
         # Collect total loss stats
         stats["loss"] = loss.detach()
@@ -536,13 +545,24 @@ class ESPnetASRModel(AbsESPnetModel):
         lid: Union[str, None] = None,
     ):
         if lid:
-            ys_in_pad, ys_out_pad = add_sos_eos(
-                ys_pad, self.sos[lid], self.eos[lid], self.ignore_id
-            )
+            # Multilingual
+            if isinstance(self.vocab_size, dict):
+                # Language specific vocab and embeddings
+                ys_in_pad, ys_out_pad = add_sos_eos(
+                    ys_pad, self.sos[lid], self.eos[lid], self.ignore_id
+                )
+            else:
+                # Shared vocab with lid as prefix prompt
+                ys_in_pad, ys_out_pad = add_sos_eos(
+                    ys_pad, self.sos, self.eos, self.ignore_id, self.lid2int[lid]
+                )
+                ys_pad_lens += 1
+
         else:
             ys_in_pad, ys_out_pad = add_sos_eos(
                 ys_pad, self.sos, self.eos, self.ignore_id
             )
+
         ys_in_lens = ys_pad_lens + 1
 
         # 1. Forward decoder

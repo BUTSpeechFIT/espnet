@@ -102,8 +102,12 @@ fi
 if [ -n "${set}" ]; then
     echo ${set} > ${dir}/result.${case}.txt
 fi
+
+replace_empty_lines_with_dot.py ${dir}/ref.wrd.trn.detok
+#sed -i 's/\s\+/,/g' test.txt
+
 echo "########################################################################################################################" >> ${dir}/result.${case}.txt
-echo "sacleBLEU" >> ${dir}/result.${case}.txt
+echo "sacreBLEU" >> ${dir}/result.${case}.txt
 if [ ${case} = tc ]; then
     sacrebleu ${dir}/ref.wrd.trn.detok -i ${dir}/hyp.wrd.trn.detok -m bleu chrf ter >> ${dir}/result.${case}.txt
     echo "write a case-sensitive BLEU result in ${dir}/result.tc.txt"
