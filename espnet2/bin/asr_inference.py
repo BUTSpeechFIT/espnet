@@ -1,34 +1,28 @@
 #!/usr/bin/env python3
 import argparse
 import logging
-from pathlib import Path
 import sys
-from typing import Any
-from typing import Optional
-from typing import Sequence
-from typing import Tuple
-from typing import Union
+from pathlib import Path
+from typing import Any, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
-from typeguard import check_argument_types
-from typeguard import check_return_type
-from typing import List
-
 from espnet.nets.batch_beam_search import BatchBeamSearch
 from espnet.nets.batch_beam_search_online_sim import BatchBeamSearchOnlineSim
-from espnet.nets.beam_search import BeamSearch
-from espnet.nets.beam_search import Hypothesis
-from espnet.nets.pytorch_backend.transformer.subsampling import TooShortUttError
+from espnet.nets.beam_search import BeamSearch, Hypothesis
+from espnet.nets.pytorch_backend.transformer.subsampling import \
+    TooShortUttError
 from espnet.nets.scorer_interface import BatchScorerInterface
 from espnet.nets.scorers.ctc import CTCPrefixScorer
 from espnet.nets.scorers.length_bonus import LengthBonus
 from espnet.utils.cli_utils import get_commandline_args
+from typeguard import check_argument_types, check_return_type
+
 from espnet2.asr.transducer.beam_search_transducer import BeamSearchTransducer
-from espnet2.asr.transducer.beam_search_transducer import (
-    ExtendedHypothesis as ExtTransHypothesis,  # noqa: H301
-)
-from espnet2.asr.transducer.beam_search_transducer import Hypothesis as TransHypothesis
+from espnet2.asr.transducer.beam_search_transducer import \
+    ExtendedHypothesis as ExtTransHypothesis  # noqa: H301
+from espnet2.asr.transducer.beam_search_transducer import \
+    Hypothesis as TransHypothesis
 from espnet2.fileio.datadir_writer import DatadirWriter
 from espnet2.fileio.read_text import read_2column_text
 from espnet2.tasks.asr import ASRTask
@@ -39,9 +33,7 @@ from espnet2.text.token_id_converter import TokenIDConverter
 from espnet2.torch_utils.device_funcs import to_device
 from espnet2.torch_utils.set_all_random_seed import set_all_random_seed
 from espnet2.utils import config_argparse
-from espnet2.utils.types import str2bool
-from espnet2.utils.types import str2triple_str
-from espnet2.utils.types import str_or_none
+from espnet2.utils.types import str2bool, str2triple_str, str_or_none
 
 
 class Speech2Text:
@@ -81,6 +73,7 @@ class Speech2Text:
         streaming: bool = False,
         enh_s2t_task: bool = False,
         lid: Union[str, None] = None,
+        lid_as_prompt: Union[str, None] = None,
     ):
         assert check_argument_types()
 
@@ -110,6 +103,9 @@ class Speech2Text:
             assert lid in asr_model.vocab_size, f"Lang ID (lid): {lid} is not present in choosen ASR model which contains the following lids: {asr_model.vocab_size.keys()}"
 
         self.lid = lid
+        if lid_as_prompt:
+            assert lid_as_prompt in asr_model.token_list, f"{lid_as_prompt} not found in token_list"
+        self.lid_as_prompt = asr_model.token_list.index(lid_as_prompt) if lid_as_prompt else lid_as_prompt
         decoder = asr_model.decoder
 
         if lid is not None:
@@ -176,6 +172,7 @@ class Speech2Text:
                 vocab_size=len(token_list),
                 token_list=token_list,
                 pre_beam_score_key=None if ctc_weight == 1.0 else "full",
+                lid_as_prompt=self.lid_as_prompt
             )
             # TODO(karita): make all scorers batchfied
             if batch_size == 1:
@@ -379,6 +376,7 @@ def inference(
     streaming: bool,
     enh_s2t_task: bool,
     lid: Union[str, None] = None,
+    lid_as_prompt: Union[str, None] = None,
 ):
     assert check_argument_types()
     if batch_size > 1:
@@ -424,6 +422,7 @@ def inference(
         streaming=streaming,
         enh_s2t_task=enh_s2t_task,
         lid=lid,
+        lid_as_prompt=lid_as_prompt,
     )
     speech2text = Speech2Text.from_pretrained(
         model_tag=model_tag, **speech2text_kwargs,
@@ -525,9 +524,14 @@ def get_parser():
     group.add_argument(
         "--asr_model_file", type=str, help="ASR model parameter file",
     )
-    group.add_argument(
+    me_group = group.add_mutually_exclusive_group(required=False)
+    me_group.add_argument(
         "--lid", type=str_or_none, default=None,
-        help="Language ID incase the model is trained in multilingual fashion (lang-specific vocab)"
+        help="Language ID incase the model is trained in multilingual fashion with language-specific independent vocabulary / embeddings."
+    )
+    me_group.add_argument(
+        "--lid_as_prompt", type=str_or_none, default=None,
+        help="Language ID incase the model is trained in multilingual fashion with shared vocabulary. The langauge ID will be used as prefix (prompt) after <sos> during decoding"
     )
     group.add_argument(
         "--lm_train_config", type=str, help="LM training configuration",
