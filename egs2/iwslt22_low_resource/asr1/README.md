@@ -173,4 +173,4 @@ This is inline with the Interspeech'23 paper.
 
 - The multilingual model should have slightly better WER than the monolingual counter-parts.
 
-- The training model can be used as initialization for speech translation fine-tuning. See [../st1/README.md](../st1/README.md).
+- The trained model can be used as initialization for speech translation fine-tuning. See [../st1/README.md](../st1/README.md).
