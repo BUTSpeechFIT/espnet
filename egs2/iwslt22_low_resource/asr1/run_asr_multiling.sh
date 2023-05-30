@@ -5,9 +5,11 @@ set -u
 set -o pipefail
 
 if [ $# -lt 5 ]; then
-    echo "$0 <lang_suffix> <nbpe> <train_config.yaml> <output_exp_dir> <collect_stats or train or decode> [lid for decoding] [token_listdir for scoring]"
+    echo "$0 <lang_suffix> <nbpe> <train_config.yaml> <output_exp_dir> <collect_stats or train or decode> [lid for decoding: fr.tc or fr] [token_listdir for scoring]"
     echo "Require atleast 5 args. Given $#"
     echo "Eg: $0 6L.300.tc 1000 conf/train_asr_ctc0.3.yaml  exp/masr_6L.300.tc_1000nbpe_12L_256d_6L_0.1d_0.3ctc_100e/ collect_stats "
+    echo "Eg: $0 6L.300.tc 1000 conf/train_asr_ctc0.3.yaml  exp/masr_6L.300.tc_1000nbpe_12L_256d_6L_0.1d_0.3ctc_100e/ train "
+    echo "Eg: $0 6L.300.tc 1000 conf/train_asr_ctc0.3.yaml  exp/masr_6L.300.tc_1000nbpe_12L_256d_6L_0.1d_0.3ctc_100e/ decode de.tc "
     exit;
 fi
 
@@ -47,8 +49,9 @@ mkdir -pv ${output_dir}
 
 step=$5
 
-lid=${6:-""}
-test_sets="dev_${lid} test_${lid}"
+lang_case=${6:-""}
+lid=$(echo ${lang_case} | cut -d'.' -f1)
+test_sets="dev_${lang_case} test_${lang_case}"
 
 if [ ! -f ${dumpdir}/${feats_type}/${train_set}/feats.scp ]; then
     echo "File ${dumpdir}/${feats_type}/${train_set}/feats.scp not found."
@@ -122,6 +125,13 @@ elif [ "${step}" == "decode" ]; then
         echo "${lid} is requried for decoding"
         exit;
     fi
+
+    for dec_set in ${test_sets}; do
+        if [ ! -f ${dumpdir}/${feats_type}/${dec_set}/feats.scp ]; then
+            echo "File ${dumpdir}/${feats_type}/${dec_set}/feats.scp not found."
+            exit;
+        fi
+    done
 
     ./asr.sh \
         --stage 12 \

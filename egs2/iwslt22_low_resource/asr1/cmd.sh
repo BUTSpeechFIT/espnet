@@ -58,10 +58,10 @@ elif [ "${cmd_backend}" = sge ]; then
     # To know the "queue" names, type "qhost -q"
     # Note that to use "--gpu *", you have to setup "complex_value" for the system scheduler.
 
-    export cpu_cmd="queue.pl --config conf/queue.conf --matylda4 0.2"
-    export train_cmd="queue.pl --config conf/queue.conf --matylda4 0.2"
+    export cpu_cmd="queue.pl --config conf/queue.conf --matylda 0.2"
+    export train_cmd="queue.pl --config conf/queue.conf --matylda 0.2"
     export cuda_cmd="queue.pl --mem 26G --gpu_mem 22G --config conf/gpu_queue.conf"
-    export decode_cmd="queue.pl --config conf/queue.conf --mem 16G --matylda4 0.5"
+    export decode_cmd="queue.pl --config conf/queue.conf --mem 16G --matylda 0.5"
 
 
 # "qsub" (Torque/PBS.)
