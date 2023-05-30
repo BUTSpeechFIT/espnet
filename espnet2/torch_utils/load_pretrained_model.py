@@ -101,10 +101,18 @@ def load_pretrained_model(
         obj = get_attr(model, dst_key)
 
     src_state = torch.load(path, map_location=map_location)
-    logger.info("Loaded {:s}".format(path))
+    num_src_modules = len(src_state)
+
+    logger.info(
+        "Loaded source model {:s} with {:d} modules".format(path, num_src_modules)
+    )
+
     if excludes is not None:
         for e in excludes.split(","):
             src_state = {k: v for k, v in src_state.items() if not k.startswith(e)}
+        logger.info(
+            "After excluding {:s}, {:d} modules exist.".format(excludes, len(src_state))
+        )
 
     if src_key is not None:
         src_state = {
@@ -116,6 +124,10 @@ def load_pretrained_model(
     dst_state = obj.state_dict()
     if ignore_init_mismatch:
         src_state = filter_state_dict(dst_state, src_state)
-    logger.info("Loaded {:d} modules".format(len(src_state)))
+    logger.info(
+        "Loaded {:d}/{:d} modules into destination model".format(
+            len(src_state), num_src_modules
+        )
+    )
     dst_state.update(src_state)
     obj.load_state_dict(dst_state)
