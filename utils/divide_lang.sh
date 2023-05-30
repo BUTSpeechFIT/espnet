@@ -25,11 +25,19 @@ for lang in ${langs}; do
     sort data/${set}/text.lc.rm.${lang} > data/${set}.${lang}/text  # dummy
     for case in lc.rm lc tc; do
         sort data/${set}/text.${case}.${lang} > data/${set}.${lang}/text.${case}
-    done
-    utils/fix_data_dir.sh --utt_extra_files "text.tc text.lc text.lc.rm" data/${set}.${lang}
+        done
+    if [ -f data/{set}.${lang}/utt2spk ]; then
+        utils/fix_data_dir.sh --utt_extra_files "text.tc text.lc text.lc.rm" data/${set}.${lang}
+    fi
+
     if [ -f data/${set}.${lang}/feats.scp ]; then
-        utils/validate_data_dir.sh data/${set}.${lang} || exit 1;
+        utils/validate_data_dir.sh data/${set}.${lang} --no-wav --non-print || exit 1;
+    elif [ -f data/${set}.${lang}/wav.scp ]; then
+        utils/validate_data_dir.sh --no-feats data/${set}.${lang} --non-print || exit 1;
     else
-        utils/validate_data_dir.sh --no-feats --no-wav data/${set}.${lang} || exit 1;
+        echo " no feats.scp, no wav.scp"
+        if [ -f data/{set}.${lang}/utt2spk ]; then
+            utils/validate_data_dir.sh --no-feats --no-wav data/${set}.${lang} --non-print || exit 1;
+        fi
     fi
 done

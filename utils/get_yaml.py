@@ -11,7 +11,28 @@ def get_parser():
     )
     parser.add_argument("inyaml")
     parser.add_argument(
-        "attr", help='foo.bar will access yaml.load(inyaml)["foo"]["bar"]'
+        "-attrs",
+        nargs="+",
+        type=str,
+        help='foo.bar will access yaml.load(inyaml)["foo"]["bar"]',
+        default=[
+            "encoder_conf",
+            "decoder_conf",
+            "model_conf",
+            "optim",
+            "optim_conf",
+            "bpemodel",
+            "batch_size",
+            "accum_grad",
+            "max_epoch",
+        ],
+    )
+    parser.add_argument(
+        "-extra",
+        nargs="+",
+        type=str,
+        help="extra attributes apart from the default ones in -atts",
+        default=[],
     )
     return parser
 
@@ -22,11 +43,16 @@ def main():
         indict = yaml.load(f, Loader=yaml.Loader)
 
     try:
-        for attr in args.attr.split("."):
-            if attr.isdigit():
-                attr = int(attr)
-            indict = indict[attr]
-        print(indict)
+        for attrib in args.attrs + args.extra:
+            for attr in attrib.split("."):
+                print("{:12s}:".format(attr), end=" ")
+                if attr.isdigit():
+                    attr = int(attr)
+                if attr in indict:
+                    print(indict[attr])
+                else:
+                    print("not found.")
+
     except KeyError:
         # print nothing
         # sys.exit(1)

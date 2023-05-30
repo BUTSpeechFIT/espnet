@@ -5,7 +5,7 @@
 from typing import Any
 from typing import List
 from typing import Sequence
-from typing import Tuple
+from typing import Tuple, Dict, Union
 
 import torch
 from typeguard import check_argument_types
@@ -52,7 +52,7 @@ class BaseTransformerDecoder(AbsDecoder, BatchScorerInterface):
 
     def __init__(
         self,
-        vocab_size: int,
+        vocab_size: Union[int, Dict[str, int]],
         encoder_output_size: int,
         dropout_rate: float = 0.1,
         positional_dropout_rate: float = 0.1,
@@ -65,19 +65,44 @@ class BaseTransformerDecoder(AbsDecoder, BatchScorerInterface):
         super().__init__()
         attention_dim = encoder_output_size
 
+        self.vocab_size = vocab_size
+
         if input_layer == "embed":
-            self.embed = torch.nn.Sequential(
-                torch.nn.Embedding(vocab_size, attention_dim),
-                pos_enc_class(attention_dim, positional_dropout_rate),
-            )
+            if isinstance(vocab_size, int):
+                self.embed = torch.nn.Sequential(
+                    torch.nn.Embedding(vocab_size, attention_dim),
+                    pos_enc_class(attention_dim, positional_dropout_rate),
+                )
+            else:
+                # dict of embeddings for multilingual model
+                self.embed = torch.nn.ModuleDict()
+                for lid, vsize in vocab_size.items():
+                    self.embed[lid] = torch.nn.Sequential(
+                        torch.nn.Embedding(vsize, attention_dim),
+                        pos_enc_class(attention_dim, positional_dropout_rate),
+                    )
+
         elif input_layer == "linear":
-            self.embed = torch.nn.Sequential(
-                torch.nn.Linear(vocab_size, attention_dim),
-                torch.nn.LayerNorm(attention_dim),
-                torch.nn.Dropout(dropout_rate),
-                torch.nn.ReLU(),
-                pos_enc_class(attention_dim, positional_dropout_rate),
-            )
+            # dict of linear layers
+            if isinstance(vocab_size, int):
+                self.embed = torch.nn.Sequential(
+                    torch.nn.Linear(vocab_size, attention_dim),
+                    torch.nn.LayerNorm(attention_dim),
+                    torch.nn.Dropout(dropout_rate),
+                    torch.nn.ReLU(),
+                    pos_enc_class(attention_dim, positional_dropout_rate),
+                )
+            else:
+                self.embed = torch.nn.ModuleDict()
+                for lid, vsize in vocab_size.items():
+                    self.embed[lid] = torch.nn.Sequential(
+                        torch.nn.Linear(vocab_size, attention_dim),
+                        torch.nn.LayerNorm(attention_dim),
+                        torch.nn.Dropout(dropout_rate),
+                        torch.nn.ReLU(),
+                        pos_enc_class(attention_dim, positional_dropout_rate),
+                    )
+
         else:
             raise ValueError(f"only 'embed' or 'linear' is supported: {input_layer}")
 
@@ -85,7 +110,13 @@ class BaseTransformerDecoder(AbsDecoder, BatchScorerInterface):
         if self.normalize_before:
             self.after_norm = LayerNorm(attention_dim)
         if use_output_layer:
-            self.output_layer = torch.nn.Linear(attention_dim, vocab_size)
+            # dict of output layers
+            if isinstance(vocab_size, int):
+                self.output_layer = torch.nn.Linear(attention_dim, vocab_size)
+            else:
+                self.output_layer = torch.nn.ModuleDict()
+                for lid, vsize in vocab_size.items():
+                    self.output_layer[lid] = torch.nn.Linear(attention_dim, vsize)
         else:
             self.output_layer = None
 
@@ -98,6 +129,7 @@ class BaseTransformerDecoder(AbsDecoder, BatchScorerInterface):
         hlens: torch.Tensor,
         ys_in_pad: torch.Tensor,
         ys_in_lens: torch.Tensor,
+        lid: Union[None, str] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Forward decoder.
 
@@ -135,14 +167,21 @@ class BaseTransformerDecoder(AbsDecoder, BatchScorerInterface):
                 memory_mask, (0, padlen), "constant", False
             )
 
-        x = self.embed(tgt)
+        if lid:
+            x = self.embed[lid](tgt)
+        else:
+            x = self.embed(tgt)
+
         x, tgt_mask, memory, memory_mask = self.decoders(
             x, tgt_mask, memory, memory_mask
         )
         if self.normalize_before:
             x = self.after_norm(x)
         if self.output_layer is not None:
-            x = self.output_layer(x)
+            if lid:
+                x = self.output_layer[lid](x)
+            else:
+                x = self.output_layer(x)
 
         olens = tgt_mask.sum(1)
         return x, olens
@@ -153,6 +192,7 @@ class BaseTransformerDecoder(AbsDecoder, BatchScorerInterface):
         tgt_mask: torch.Tensor,
         memory: torch.Tensor,
         cache: List[torch.Tensor] = None,
+        lid: Union[None, str] = None
     ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         """Forward one step.
 
@@ -167,7 +207,10 @@ class BaseTransformerDecoder(AbsDecoder, BatchScorerInterface):
             y, cache: NN output value and cache per `self.decoders`.
             y.shape` is (batch, maxlen_out, token)
         """
-        x = self.embed(tgt)
+        if lid:
+            x = self.embed[lid](tgt)
+        else:
+            x = self.embed(tgt)
         if cache is None:
             cache = [None] * len(self.decoders)
         new_cache = []
@@ -182,20 +225,23 @@ class BaseTransformerDecoder(AbsDecoder, BatchScorerInterface):
         else:
             y = x[:, -1]
         if self.output_layer is not None:
-            y = torch.log_softmax(self.output_layer(y), dim=-1)
+            if lid:
+                y = torch.log_softmax(self.output_layer[lid](y), dim=-1)
+            else:
+                y = torch.log_softmax(self.output_layer(y), dim=-1)
 
         return y, new_cache
 
-    def score(self, ys, state, x):
+    def score(self, ys, state, x, lid=None):
         """Score."""
         ys_mask = subsequent_mask(len(ys), device=x.device).unsqueeze(0)
         logp, state = self.forward_one_step(
-            ys.unsqueeze(0), ys_mask, x.unsqueeze(0), cache=state
+            ys.unsqueeze(0), ys_mask, x.unsqueeze(0), cache=state, lid=lid
         )
         return logp.squeeze(0), state
 
     def batch_score(
-        self, ys: torch.Tensor, states: List[Any], xs: torch.Tensor
+            self, ys: torch.Tensor, states: List[Any], xs: torch.Tensor, lid: Union[None, str]=None
     ) -> Tuple[torch.Tensor, List[Any]]:
         """Score new token batch.
 
@@ -225,7 +271,7 @@ class BaseTransformerDecoder(AbsDecoder, BatchScorerInterface):
 
         # batch decoding
         ys_mask = subsequent_mask(ys.size(-1), device=xs.device).unsqueeze(0)
-        logp, states = self.forward_one_step(ys, ys_mask, xs, cache=batch_state)
+        logp, states = self.forward_one_step(ys, ys_mask, xs, cache=batch_state, lid=lid)
 
         # transpose state of [layer, batch] into [batch, layer]
         state_list = [[states[i][b] for i in range(n_layers)] for b in range(n_batch)]
@@ -235,7 +281,7 @@ class BaseTransformerDecoder(AbsDecoder, BatchScorerInterface):
 class TransformerDecoder(BaseTransformerDecoder):
     def __init__(
         self,
-        vocab_size: int,
+        vocab_size: Union[int, Dict],
         encoder_output_size: int,
         attention_heads: int = 4,
         linear_units: int = 2048,
@@ -284,7 +330,7 @@ class TransformerDecoder(BaseTransformerDecoder):
 class LightweightConvolutionTransformerDecoder(BaseTransformerDecoder):
     def __init__(
         self,
-        vocab_size: int,
+        vocab_size: Union[Dict, int],
         encoder_output_size: int,
         attention_heads: int = 4,
         linear_units: int = 2048,

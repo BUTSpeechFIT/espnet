@@ -36,9 +36,12 @@ nj=32                # The number of parallel jobs.
 inference_nj=32      # The number of parallel jobs in decoding.
 gpu_inference=false  # Whether to perform gpu decoding.
 dumpdir=dump         # Directory to dump features.
+datadir=data
 expdir=exp           # Directory to save experiments.
 python=python3       # Specify python to execute espnet commands.
-
+copy_feats_to_dir="" # path to dir that has faster access to the GPU machine.
+                     # eg: /tmp or /mnt/ssd, where speech feats will be copied
+remove_dups=0        # remove duplicate lines from train.txt lm_train.txt
 # Data preparation related
 local_data_opts= # The options given to local/data.sh.
 
@@ -62,7 +65,12 @@ sos_eos="<sos/eos>" # sos and eos symbole
 bpe_input_sentence_size=100000000 # Size of input sentence for BPE.
 bpe_nlsyms=         # non-linguistic symbols list, separated by a comma, for BPE
 bpe_char_cover=1.0  # character coverage when modeling BPE
-
+token_listdir=      # Path to directory of tokenizer model and vocab.
+input_token_list_ftype="token_list"
+                         # Is token list just a list of words or filelist with paths to tokens.txt
+                         # Options are 'token_list' or 'token_flist'. The 'token_flist' option is used to
+                         # train multilingual ASR with lang-specific input/output layers.
+                         # It can be just 'token_list' with shared vocab and prompt based training
 # Ngram model related
 use_ngram=false
 ngram_exp=
@@ -94,6 +102,9 @@ pretrained_model=              # Pretrained model to load
 ignore_init_mismatch=false      # Ignore initial mismatch
 feats_normalize=global_mvn # Normalizaton layer type.
 num_splits_asr=1           # Number of splitting for lm corpus.
+multilingual_mode=false    # multilingual mode
+lid=            # monolingual decoding from a multilingual mode - lang-specfic in/out layers
+lid_as_prompt=  # monolingual prompt decoding from a multilingual mode
 
 # Upload model related
 hf_repo=
@@ -145,6 +156,9 @@ asr_speech_fold_length=800 # fold_length for speech data during ASR training.
 asr_text_fold_length=150   # fold_length for text data during ASR training.
 lm_fold_length=150         # fold_length for LM training.
 
+# multilingual specific arguments
+# utt2cat=false
+
 help_message=$(cat << EOF
 Usage: $0 --train-set "<train_set_name>" --valid-set "<valid_set_name>" --test_sets "<test_set_names>"
 
@@ -161,9 +175,11 @@ Options:
     --nj             # The number of parallel jobs (default="${nj}").
     --inference_nj   # The number of parallel jobs in decoding (default="${inference_nj}").
     --gpu_inference  # Whether to perform gpu decoding (default="${gpu_inference}").
+    --datadir        # Directory where the data for train/dev/test is present (default="${datadir}").
     --dumpdir        # Directory to dump features (default="${dumpdir}").
     --expdir         # Directory to save experiments (default="${expdir}").
     --python         # Specify python to execute espnet commands (default="${python}").
+    --copy_feats_to_dir     # path to dir that has faster access to the GPU machine. eg: /tmp or /mnt/ssd, where speech feats will be copied (default="")
 
     # Data preparation related
     --local_data_opts # The options given to local/data.sh (default="${local_data_opts}").
@@ -188,6 +204,15 @@ Options:
     --bpe_input_sentence_size # Size of input sentence for BPE (default="${bpe_input_sentence_size}").
     --bpe_nlsyms              # Non-linguistic symbol list for sentencepiece, separated by a comma. (default="${bpe_nlsyms}").
     --bpe_char_cover          # Character coverage when modeling BPE (default="${bpe_char_cover}").
+    --token_listdir           # Path to token_listdir. By default it will be determined
+    --remove_dups             # Remove duplicates from train.txt and lm_train.txt (default="${remove_dups}")
+                              # automatically based on above tokenization related options.
+                              # (default=)
+    input_token_list_ftype=  # Is token list just a list of words or filelist with paths
+                             # to tokens.txt. Options are 'token_list' or 'token_flist'.
+                             # The 'token_flist' option is used to train multilingual ASR with
+                             # lang-specific input/output layers. It can be just 'token_list' with # shared vocab and prompt based training.
+                             # (default: ${input_token_list_ftype})
 
     # Language model related
     --lm_tag          # Suffix to the result dir for language model training (default="${lm_tag}").
@@ -215,6 +240,11 @@ Options:
     --ignore_init_mismatch=      # Ignore mismatch parameter init with pretrained model (default="${ignore_init_mismatch}").
     --feats_normalize  # Normalizaton layer type (default="${feats_normalize}").
     --num_splits_asr   # Number of splitting for lm corpus  (default="${num_splits_asr}").
+    --multilingual_mode # true or false, (default:false).
+                        # If true, expects utt2category file where category is langauge ID.
+                        # Soft links from {lid.scp, utt2lang }-> utt2category file
+                        # is also required.
+                        # can be used in conjunction with input_token_list_ftype
 
     # Decoding related
     --inference_tag       # Suffix to the result dir for decoding (default="${inference_tag}").
@@ -227,6 +257,11 @@ Options:
     --download_model      # Download a model from Model Zoo and use it for decoding (default="${download_model}").
     --use_streaming       # Whether to use streaming decoding (default="${use_streaming}").
     --use_maskctc         # Whether to use maskctc decoding (default="${use_streaming}").
+    --lid             # monolingual decoding from a multilingual mode - lang-specfic in/out layers
+    --lid_as_prompt   # monolingual prompt decoding from a multilingual mode. Depending on the
+                      # model, you should either lid or lid_as_prompt but not both, because they
+                      # based on different assumptions about the model
+
 
     # [Task dependent] Set the datadir name created by local/data.sh
     --train_set     # Name of training set (required).
@@ -294,10 +329,12 @@ fi
 [ -z "${lm_test_text}" ] && lm_test_text="${data_feats}/${test_sets%% *}/text"
 
 # Check tokenization type
-if [ "${lang}" != noinfo ]; then
-    token_listdir=data/${lang}_token_list
-else
-    token_listdir=data/token_list
+if [ -z ${token_listdir} ]; then
+    if [ "${lang}" != noinfo ]; then
+        token_listdir=${datadir}/${lang}_token_list
+    else
+        token_listdir=${datadir}/token_list
+    fi
 fi
 bpedir="${token_listdir}/bpe_${bpemode}${nbpe}"
 bpeprefix="${bpedir}"/bpe
@@ -440,24 +477,24 @@ fi
 
 if ! "${skip_data_prep}"; then
     if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
-        log "Stage 1: Data preparation for data/${train_set}, data/${valid_set}, etc."
+        log "Stage 1: Data preparation for ${datadir}/${train_set}, ${datadir}/${valid_set}, etc."
         # [Task dependent] Need to create data.sh for new corpus
-        local/data.sh ${local_data_opts}
+        local/data.sh "${local_data_opts}"
     fi
 
     if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
         if [ -n "${speed_perturb_factors}" ]; then
-           log "Stage 2: Speed perturbation: data/${train_set} -> data/${train_set}_sp"
+           log "Stage 2: Speed perturbation: ${datadir}/${train_set} -> ${datadir}/${train_set}_sp"
            for factor in ${speed_perturb_factors}; do
                if [[ $(bc <<<"${factor} != 1.0") == 1 ]]; then
-                   scripts/utils/perturb_data_dir_speed.sh "${factor}" "data/${train_set}" "data/${train_set}_sp${factor}"
-                   _dirs+="data/${train_set}_sp${factor} "
+                   scripts/utils/perturb_data_dir_speed.sh "${factor}" "${datadir}/${train_set}" "${datadir}/${train_set}_sp${factor}"
+                   _dirs+="${datadir}/${train_set}_sp${factor} "
                else
                    # If speed factor is 1, same as the original
-                   _dirs+="data/${train_set} "
+                   _dirs+="${datadir}/${train_set} "
                fi
            done
-           utils/combine_data.sh "data/${train_set}_sp" ${_dirs}
+           utils/combine_data.sh "${datadir}/${train_set}_sp" ${_dirs}
         else
            log "Skip stage 2: Speed perturbation"
         fi
@@ -469,7 +506,7 @@ if ! "${skip_data_prep}"; then
 
     if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
         if [ "${feats_type}" = raw ]; then
-            log "Stage 3: Format wav.scp: data/ -> ${data_feats}"
+            log "Stage 3: Format wav.scp: ${datadir}/ -> ${data_feats}"
 
             # ====== Recreating "wav.scp" ======
             # Kaldi-wav.scp, which can describe the file path with unix-pipe, like "cat /some/path |",
@@ -479,33 +516,33 @@ if ! "${skip_data_prep}"; then
             # If nothing is need, then format_wav_scp.sh does nothing:
             # i.e. the input file format and rate is same as the output.
 
-            for dset in "${train_set}" "${valid_set}" ${test_sets}; do
+             for dset in "${train_set}" "${valid_set}" ${test_sets}; do
                 if [ "${dset}" = "${train_set}" ] || [ "${dset}" = "${valid_set}" ]; then
                     _suf="/org"
                 else
                     _suf=""
                 fi
-                utils/copy_data_dir.sh --validate_opts --non-print data/"${dset}" "${data_feats}${_suf}/${dset}"
+                utils/copy_data_dir.sh --validate_opts --non-print ${datadir}/"${dset}" "${data_feats}${_suf}/${dset}"
                 rm -f ${data_feats}${_suf}/${dset}/{segments,wav.scp,reco2file_and_channel,reco2dur}
                 _opts=
-                if [ -e data/"${dset}"/segments ]; then
+                if [ -e ${datadir}/"${dset}"/segments ]; then
                     # "segments" is used for splitting wav files which are written in "wav".scp
                     # into utterances. The file format of segments:
                     #   <segment_id> <record_id> <start_time> <end_time>
                     #   "e.g. call-861225-A-0050-0065 call-861225-A 5.0 6.5"
                     # Where the time is written in seconds.
-                    _opts+="--segments data/${dset}/segments "
+                    _opts+="--segments ${datadir}/${dset}/segments "
                 fi
                 # shellcheck disable=SC2086
                 scripts/audio/format_wav_scp.sh --nj "${nj}" --cmd "${train_cmd}" \
                     --audio-format "${audio_format}" --fs "${fs}" ${_opts} \
-                    "data/${dset}/wav.scp" "${data_feats}${_suf}/${dset}"
+                    "${datadir}/${dset}/wav.scp" "${data_feats}${_suf}/${dset}"
 
                 echo "${feats_type}" > "${data_feats}${_suf}/${dset}/feats_type"
             done
 
         elif [ "${feats_type}" = fbank_pitch ]; then
-            log "[Require Kaldi] Stage 3: ${feats_type} extract: data/ -> ${data_feats}"
+            log "[Require Kaldi] Stage 3: ${feats_type} extract: ${datadir}/ -> ${data_feats}"
 
             for dset in "${train_set}" "${valid_set}" ${test_sets}; do
                 if [ "${dset}" = "${train_set}" ] || [ "${dset}" = "${valid_set}" ]; then
@@ -514,7 +551,7 @@ if ! "${skip_data_prep}"; then
                     _suf=""
                 fi
                 # 1. Copy datadir
-                utils/copy_data_dir.sh --validate_opts --non-print data/"${dset}" "${data_feats}${_suf}/${dset}"
+                utils/copy_data_dir.sh --validate_opts --non-print ${datadir}/"${dset}" "${data_feats}${_suf}/${dset}"
 
                 # 2. Feature extract
                 _nj=$(min "${nj}" "$(<"${data_feats}${_suf}/${dset}/utt2spk" wc -l)")
@@ -534,12 +571,12 @@ if ! "${skip_data_prep}"; then
             done
 
         elif [ "${feats_type}" = fbank ]; then
-            log "Stage 3: ${feats_type} extract: data/ -> ${data_feats}"
+            log "Stage 3: ${feats_type} extract: ${datadir}/ -> ${data_feats}"
             log "${feats_type} is not supported yet."
             exit 1
 
         elif  [ "${feats_type}" = extracted ]; then
-            log "Stage 3: ${feats_type} extract: data/ -> ${data_feats}"
+            log "Stage 3: ${feats_type} extract: ${datadir}/ -> ${data_feats}"
             # Assumming you don't have wav.scp, but feats.scp is created by local/data.sh instead.
 
             for dset in "${train_set}" "${valid_set}" ${test_sets}; do
@@ -549,12 +586,12 @@ if ! "${skip_data_prep}"; then
                     _suf=""
                 fi
                 # Generate dummy wav.scp to avoid error by copy_data_dir.sh
-                <data/"${dset}"/cmvn.scp awk ' { print($1,"<DUMMY>") }' > data/"${dset}"/wav.scp
-                utils/copy_data_dir.sh --validate_opts --non-print data/"${dset}" "${data_feats}${_suf}/${dset}"
+                #<${datadir}/"${dset}"/cmvn.scp awk ' { print($1,"<DUMMY>") }' > ${datadir}/"${dset}"/wav.scp
+                utils/copy_data_dir.sh --validate_opts --non-print ${datadir}/"${dset}" "${data_feats}${_suf}/${dset}"
 
                 # Derive the the frame length and feature dimension
                 _nj=$(min "${nj}" "$(<"${data_feats}${_suf}/${dset}/utt2spk" wc -l)")
-                scripts/feats/feat_to_shape.sh --nj "${_nj}" --cmd "${train_cmd}" \
+                scripts/feats/feat_to_shape.sh --nj "${_nj}" --cmd "${cpu_cmd}" \
                     "${data_feats}${_suf}/${dset}/feats.scp" "${data_feats}${_suf}/${dset}/feats_shape"
 
                 pyscripts/feats/feat-to-shape.py "scp:head -n 1 ${data_feats}${_suf}/${dset}/feats.scp |" - | \
@@ -568,7 +605,6 @@ if ! "${skip_data_prep}"; then
             exit 2
         fi
     fi
-
 
     if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         log "Stage 4: Remove long/short data: ${data_feats}/org -> ${data_feats}"
@@ -631,6 +667,14 @@ if ! "${skip_data_prep}"; then
 
         # shellcheck disable=SC2002
         cat ${lm_train_text} | awk ' { if( NF != 1 ) print $0; } ' > "${data_feats}/lm_train.txt"
+
+        if [ "${remove_dups}" == "1" ]; then
+            log "Removing duplicates from ${data_feats}/lm_train.txt.orig"
+            cp -v "${data_feats}/lm_train.txt" "${data_feats}/lm_train.txt".orig
+            cat "${data_feats}/lm_train.txt.orig" | sort -u > "${data_feats}/lm_train.txt"
+        fi
+
+
     fi
 
 
@@ -640,12 +684,28 @@ if ! "${skip_data_prep}"; then
 
             mkdir -p "${bpedir}"
             # shellcheck disable=SC2002
-            cat ${bpe_train_text} | cut -f 2- -d" "  > "${bpedir}"/train.txt
+
+            if [ -f ${bpedir}/train.txt ]; then
+                echo "INFO: ${bpedir}/train.txt already exists. Not overwriting."
+            else
+                cat ${bpe_train_text} | cut -f 2- -d" "  > "${bpedir}"/train.txt
+            fi
+
+            if [ "${remove_dups}" == "1" ]; then
+                log "Removing duplicates from ${bpedir}/train.txt"
+                cp -v ${bpedir}/train.txt ${bpedir}/train.txt.orig
+                cat ${bpedir}/train.txt.orig | sort -u > ${bpedir}/train.txt
+            fi
 
             if [ -n "${bpe_nlsyms}" ]; then
                 _opts_spm="--user_defined_symbols=${bpe_nlsyms}"
             else
                 _opts_spm=""
+            fi
+
+            if [ -f "${bpeprefix}.model" ]; then
+                echo "${bpeprefix}.model already exists. Choose a different directory or skip this step"
+                exit 1;
             fi
 
             spm_train \
@@ -709,6 +769,11 @@ else
     log "Skip the stages for data preparation"
 fi
 
+# create utt2category symlink to lid.scp to create batches of same language during training
+#if [ ${utt2cat} = true ]; then
+#    python3 lid_scp.py --bpedir ${bpedir} \
+#                       --dump_dirs ${data_feats}/${train_set} ${data_feats}/${valid_set} ${data_feats}/${test_sets}
+#if
 
 # ========================== Data preparation is done here. ==========================
 
@@ -716,7 +781,7 @@ fi
 if ! "${skip_train}"; then
     if "${use_lm}"; then
         if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
-            log "Stage 6: LM collect stats: train_set=${data_feats}/lm_train.txt, dev_set=${lm_dev_text}"
+            log "Stage 6: LM collect stats: train_set=${lm_train_text}, dev_set=${lm_dev_text}"
 
             _opts=
             if [ -n "${lm_config}" ]; then
@@ -729,9 +794,9 @@ if ! "${skip_train}"; then
             _logdir="${lm_stats_dir}/logdir"
             mkdir -p "${_logdir}"
             # Get the minimum number among ${nj} and the number lines of input files
-            _nj=$(min "${nj}" "$(<${data_feats}/lm_train.txt wc -l)" "$(<${lm_dev_text} wc -l)")
+            _nj=$(min "${nj}" "$(<${lm_train_text} wc -l)" "$(<${lm_dev_text} wc -l)")
 
-            key_file="${data_feats}/lm_train.txt"
+            key_file="${lm_train_text}"
             split_scps=""
             for n in $(seq ${_nj}); do
                 split_scps+=" ${_logdir}/train.${n}.scp"
@@ -756,7 +821,7 @@ if ! "${skip_train}"; then
             # NOTE: --*_shape_file doesn't require length information if --batch_type=unsorted,
             #       but it's used only for deciding the sample ids.
             # shellcheck disable=SC2086
-            ${train_cmd} JOB=1:"${_nj}" "${_logdir}"/stats.JOB.log \
+            ${cpu_cmd} JOB=1:"${_nj}" "${_logdir}"/stats.JOB.log \
                 ${python} -m espnet2.bin.lm_train \
                     --collect_stats true \
                     --use_preprocessor true \
@@ -766,7 +831,7 @@ if ! "${skip_train}"; then
                     --non_linguistic_symbols "${nlsyms_txt}" \
                     --cleaner "${cleaner}" \
                     --g2p "${g2p}" \
-                    --train_data_path_and_name_and_type "${data_feats}/lm_train.txt,text,text" \
+                    --train_data_path_and_name_and_type "${lm_train_text},text,text" \
                     --valid_data_path_and_name_and_type "${lm_dev_text},text,text" \
                     --train_shape_file "${_logdir}/train.JOB.scp" \
                     --valid_shape_file "${_logdir}/dev.JOB.scp" \
@@ -793,7 +858,7 @@ if ! "${skip_train}"; then
 
 
         if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
-            log "Stage 7: LM Training: train_set=${data_feats}/lm_train.txt, dev_set=${lm_dev_text}"
+            log "Stage 7: LM Training: train_set=${lm_train_text}, dev_set=${lm_dev_text}"
 
             _opts=
             if [ -n "${lm_config}" ]; then
@@ -811,7 +876,7 @@ if ! "${skip_train}"; then
                 if [ ! -f "${_split_dir}/.done" ]; then
                     rm -f "${_split_dir}/.done"
                     ${python} -m espnet2.bin.split_scps \
-                      --scps "${data_feats}/lm_train.txt" "${lm_stats_dir}/train/text_shape.${lm_token_type}" \
+                      --scps "${lm_train_text}" "${lm_stats_dir}/train/text_shape.${lm_token_type}" \
                       --num_splits "${num_splits_lm}" \
                       --output_dir "${_split_dir}"
                     touch "${_split_dir}/.done"
@@ -824,7 +889,7 @@ if ! "${skip_train}"; then
                 _opts+="--multiple_iterator true "
 
             else
-                _opts+="--train_data_path_and_name_and_type ${data_feats}/lm_train.txt,text,text "
+                _opts+="--train_data_path_and_name_and_type ${lm_train_text},text,text "
                 _opts+="--train_shape_file ${lm_stats_dir}/train/text_shape.${lm_token_type} "
             fi
 
@@ -843,7 +908,7 @@ if ! "${skip_train}"; then
 
             # shellcheck disable=SC2086
             ${python} -m espnet2.bin.launch \
-                --cmd "${cuda_cmd} --name ${jobname}" \
+                --cmd "${lm_cuda_cmd} --name ${jobname}" \
                 --log "${lm_exp}"/train.log \
                 --ngpu "${ngpu}" \
                 --num_nodes "${num_nodes}" \
@@ -896,7 +961,7 @@ if ! "${skip_train}"; then
     fi
     if [ ${stage} -le 9 ] && [ ${stop_stage} -ge 9 ]; then
         if "${use_ngram}"; then
-            log "Stage 9: Ngram Training: train_set=${data_feats}/lm_train.txt"
+            log "Stage 9: Ngram Training: train_set=${lm_train_txt}"
             cut -f 2- -d " " ${data_feats}/lm_train.txt | lmplz -S "20%" --discount_fallback -o ${ngram_num} - >${ngram_exp}/${ngram_num}gram.arpa
             build_binary -s ${ngram_exp}/${ngram_num}gram.arpa ${ngram_exp}/${ngram_num}gram.bin
         else
@@ -957,6 +1022,13 @@ if ! "${skip_train}"; then
         # shellcheck disable=SC2086
         utils/split_scp.pl "${key_file}" ${split_scps}
 
+        if [ "${multilingual_mode}" == "true" ]; then
+            # need extra options for collect_stats
+            _opts+="--train_data_path_and_name_and_type ${_asr_train_dir}/lid.scp,lid,text "
+            _opts+="--valid_data_path_and_name_and_type ${_asr_valid_dir}/lid.scp,lid,text "
+            _opts+="--input_token_list_ftype ${input_token_list_ftype} "
+        fi
+
         # 2. Generate run.sh
         log "Generate '${asr_stats_dir}/run.sh'. You can resume the process from stage 10 using this script"
         mkdir -p "${asr_stats_dir}"; echo "${run_args} --stage 10 \"\$@\"; exit \$?" > "${asr_stats_dir}/run.sh"; chmod +x "${asr_stats_dir}/run.sh"
@@ -968,7 +1040,7 @@ if ! "${skip_train}"; then
         #       but it's used only for deciding the sample ids.
 
         # shellcheck disable=SC2086
-        ${train_cmd} JOB=1:"${_nj}" "${_logdir}"/stats.JOB.log \
+        ${cpu_cmd} JOB=1:"${_nj}" "${_logdir}"/stats.JOB.log \
             ${python} -m espnet2.bin.asr_train \
                 --collect_stats true \
                 --use_preprocessor true \
@@ -1076,6 +1148,13 @@ if ! "${skip_train}"; then
             _opts+="--train_shape_file ${asr_stats_dir}/train/text_shape.${token_type} "
         fi
 
+        if [ "${multilingual_mode}" == "true" ]; then
+            # need extra options for collect_stats
+            _opts+="--train_data_path_and_name_and_type ${_asr_train_dir}/lid.scp,lid,text "
+            _opts+="--valid_data_path_and_name_and_type ${_asr_valid_dir}/lid.scp,lid,text "
+            _opts+="--input_token_list_ftype token_flist "
+        fi
+
         log "Generate '${asr_exp}/run.sh'. You can resume the process from stage 11 using this script"
         mkdir -p "${asr_exp}"; echo "${run_args} --stage 11 \"\$@\"; exit \$?" > "${asr_exp}/run.sh"; chmod +x "${asr_exp}/run.sh"
 
@@ -1114,6 +1193,7 @@ if ! "${skip_train}"; then
                 --fold_length "${_fold_length}" \
                 --fold_length "${asr_text_fold_length}" \
                 --output_dir "${asr_exp}" \
+                --copy_feats_to_dir ${copy_feats_to_dir} \
                 ${_opts} ${asr_args}
 
     fi
@@ -1205,6 +1285,13 @@ if ! "${skip_eval}"; then
           fi
         fi
 
+        if [ -n "${lid}" ]; then
+            _opts+="--lid ${lid}"
+        fi
+        if [ -n "${lid_as_prompt}" ]; then
+            _opts+="--lid_as_prompt ${lid_as_prompt}"
+        fi
+
         for dset in ${test_sets}; do
             _data="${data_feats}/${dset}"
             _dir="${asr_exp}/${inference_tag}/${dset}"
@@ -1276,6 +1363,14 @@ if ! "${skip_eval}"; then
         for dset in ${test_sets}; do
             _data="${data_feats}/${dset}"
             _dir="${asr_exp}/${inference_tag}/${dset}"
+
+            if [ ! -z ${lid_as_prompt} ]; then
+                # removes lang id (eg: [cs] or [pl] or [en]) from the hyp text
+                # so that WER, CER, TER can be computed reliably
+                ${python} pyscripts/utils/remove_lid_prompt.py \
+                    -text ${_dir}/text \
+                    -lid_prompt ${lid_as_prompt}
+            fi
 
             for _type in cer wer ter; do
                 [ "${_type}" = ter ] && [ ! -f "${bpemodel}" ] && continue

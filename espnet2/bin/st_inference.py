@@ -1,28 +1,23 @@
 #!/usr/bin/env python3
 import argparse
 import logging
-from pathlib import Path
 import sys
-from typing import Any
-from typing import Optional
-from typing import Sequence
-from typing import Tuple
-from typing import Union
+from pathlib import Path
+from typing import Any, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
-from typeguard import check_argument_types
-from typeguard import check_return_type
-from typing import List
-
 from espnet.nets.batch_beam_search import BatchBeamSearch
-from espnet.nets.beam_search import BeamSearch
-from espnet.nets.beam_search import Hypothesis
+from espnet.nets.beam_search import BeamSearch, Hypothesis
 from espnet.nets.pytorch_backend.transformer.subsampling import TooShortUttError
 from espnet.nets.scorer_interface import BatchScorerInterface
+from espnet.nets.scorers.ctc import CTCPrefixScorer
 from espnet.nets.scorers.length_bonus import LengthBonus
 from espnet.utils.cli_utils import get_commandline_args
+from typeguard import check_argument_types, check_return_type
+
 from espnet2.fileio.datadir_writer import DatadirWriter
+from espnet2.fileio.read_text import read_2column_text
 from espnet2.tasks.enh_s2t import EnhS2TTask
 from espnet2.tasks.lm import LMTask
 from espnet2.tasks.st import STTask
@@ -31,9 +26,7 @@ from espnet2.text.token_id_converter import TokenIDConverter
 from espnet2.torch_utils.device_funcs import to_device
 from espnet2.torch_utils.set_all_random_seed import set_all_random_seed
 from espnet2.utils import config_argparse
-from espnet2.utils.types import str2bool
-from espnet2.utils.types import str2triple_str
-from espnet2.utils.types import str_or_none
+from espnet2.utils.types import str2bool, str2triple_str, str_or_none
 
 
 class Speech2Text:
@@ -64,11 +57,14 @@ class Speech2Text:
         batch_size: int = 1,
         dtype: str = "float32",
         beam_size: int = 20,
+        ctc_weight: float = 0.0,
         lm_weight: float = 1.0,
         ngram_weight: float = 0.9,
         penalty: float = 0.0,
         nbest: int = 1,
         enh_s2t_task: bool = False,
+        lid: Union[str, None] = None,
+        lid_as_prompt: Union[str, None] = None,
     ):
         assert check_argument_types()
 
@@ -93,12 +89,42 @@ class Speech2Text:
             )
         st_model.to(dtype=getattr(torch, dtype)).eval()
 
+        if st_model.is_multilingual:
+            assert (
+                lid != None
+            ), "The trained model is multilingual with language specific vocab. Specify the language with `lid` parameter."
+            assert (
+                lid in st_model.vocab_size
+            ), f"Lang ID (lid): {lid} is not present in choosen ASR model which contains the following lids: {st_model.vocab_size.keys()}"
+        self.lid = lid
+
+        if lid_as_prompt:
+            assert (
+                lid_as_prompt in st_model.token_list
+            ), f"{lid_as_prompt} not found in token_list"
+        self.lid_as_prompt = (
+            st_model.token_list.index(lid_as_prompt) if lid_as_prompt else lid_as_prompt
+        )
+
         decoder = st_model.decoder
-        token_list = st_model.token_list
+        ctc = None
+        if lid is not None:
+            token_list = st_model.token_list[lid]
+            if ctc_weight > 0.0:
+                ctc = CTCPrefixScorer(ctc=st_model.ctc[lid], eos=st_model.eos[lid])
+            decoder.embed = decoder.embed[lid]
+            decoder.output_layer = decoder.output_layer[lid]
+        else:
+            token_list = st_model.token_list
+            if ctc_weight > 0.0:
+                ctc = CTCPrefixScorer(ctc=st_model.ctc, eos=st_model.eos)
+
         scorers.update(
             decoder=decoder,
             length_bonus=LengthBonus(len(token_list)),
         )
+        if ctc:
+            scorers.update(ctc=ctc)
 
         # 2. Build Language model
         if lm_train_config is not None:
@@ -124,6 +150,7 @@ class Speech2Text:
         # 4. Build BeamSearch object
         weights = dict(
             decoder=1.0,
+            ctc=ctc_weight,
             lm=lm_weight,
             ngram=ngram_weight,
             length_bonus=penalty,
@@ -132,11 +159,12 @@ class Speech2Text:
             beam_size=beam_size,
             weights=weights,
             scorers=scorers,
-            sos=st_model.sos,
-            eos=st_model.eos,
+            sos=st_model.sos if lid is None else st_model.sos[lid],
+            eos=st_model.eos if lid is None else st_model.eos[lid],
             vocab_size=len(token_list),
             token_list=token_list,
             pre_beam_score_key="full",
+            lid_as_prompt=self.lid_as_prompt,
         )
         # TODO(karita): make all scorers batchfied
         if batch_size == 1:
@@ -165,6 +193,12 @@ class Speech2Text:
             token_type = st_train_args.token_type
         if bpemodel is None:
             bpemodel = st_train_args.bpemodel
+            if lid:
+                lid2bpe = read_2column_text(bpemodel)
+                assert (
+                    lid in lid2bpe
+                ), f"Lang ID {lid} not present in bpe flist {bpemodel}"
+                bpemodel = lid2bpe[lid]
 
         if token_type is None:
             tokenizer = None
@@ -191,7 +225,9 @@ class Speech2Text:
 
     @torch.no_grad()
     def __call__(
-        self, speech: Union[torch.Tensor, np.ndarray]
+        self,
+        speech: Union[torch.Tensor, np.ndarray],
+        lid: Union[str, None] = None,
     ) -> List[Tuple[Optional[str], List[str], List[int], Hypothesis]]:
         """Inference
 
@@ -287,6 +323,7 @@ def inference(
     beam_size: int,
     ngpu: int,
     seed: int,
+    ctc_weight: float,
     lm_weight: float,
     ngram_weight: float,
     penalty: float,
@@ -306,7 +343,9 @@ def inference(
     token_type: Optional[str],
     bpemodel: Optional[str],
     allow_variable_data_keys: bool,
-    enh_s2t_task: bool,
+    enh_s2t_task: bool = False,
+    lid: Union[str, None] = None,
+    lid_as_prompt: Union[str, None] = None,
 ):
     assert check_argument_types()
     if batch_size > 1:
@@ -343,11 +382,14 @@ def inference(
         minlenratio=minlenratio,
         dtype=dtype,
         beam_size=beam_size,
+        ctc_weight=ctc_weight,
         lm_weight=lm_weight,
         ngram_weight=ngram_weight,
         penalty=penalty,
         nbest=nbest,
         enh_s2t_task=enh_s2t_task,
+        lid=lid,
+        lid_as_prompt=lid_as_prompt,
     )
     speech2text = Speech2Text.from_pretrained(
         model_tag=model_tag,
@@ -379,7 +421,7 @@ def inference(
 
             # N-best list of (text, token, token_int, hyp_object)
             try:
-                results = speech2text(**batch)
+                results = speech2text(**batch, lid=lid)
             except TooShortUttError as e:
                 logging.warning(f"Utterance {keys} {e}")
                 hyp = Hypothesis(score=0.0, scores={}, states={}, yseq=[])
@@ -458,6 +500,19 @@ def get_parser():
         type=str,
         help="ST model parameter file",
     )
+    me_group = group.add_mutually_exclusive_group(required=False)
+    me_group.add_argument(
+        "--lid",
+        type=str_or_none,
+        default=None,
+        help="Language ID incase the model is trained in multilingual fashion with language-specific independent vocabulary / embeddings.",
+    )
+    me_group.add_argument(
+        "--lid_as_prompt",
+        type=str_or_none,
+        default=None,
+        help="Language ID incase the model is trained in multilingual fashion with shared vocabulary. The langauge ID will be used as prefix (prompt) after <sos> during decoding",
+    )
     group.add_argument(
         "--lm_train_config",
         type=str,
@@ -516,6 +571,9 @@ def get_parser():
         type=float,
         default=0.0,
         help="Input length ratio to obtain min output length",
+    )
+    group.add_argument(
+        "--ctc_weight", type=float, default=0.0, help="CTC weight in joint decoding",
     )
     group.add_argument("--lm_weight", type=float, default=1.0, help="RNNLM weight")
     group.add_argument("--ngram_weight", type=float, default=0.9, help="ngram weight")

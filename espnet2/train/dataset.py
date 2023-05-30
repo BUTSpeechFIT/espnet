@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 from abc import ABC
 from abc import abstractmethod
 import collections
@@ -336,9 +338,11 @@ class ESPnetDataset(AbsDataset):
             path:  The file path
             loader_type:  loader_type. sound, npy, text_int, text_float, etc
         """
+        flag = False
         for key, dic in DATA_TYPES.items():
             # e.g. loader_type="sound"
             # -> return DATA_TYPES["sound"]["func"](path)
+
             if re.match(key, loader_type):
                 kwargs = {}
                 for key2 in dic["kwargs"]:
@@ -355,15 +359,17 @@ class ESPnetDataset(AbsDataset):
 
                 func = dic["func"]
                 try:
+                    flag = False
                     return func(path, **kwargs)
                 except Exception:
+                    flag = True
                     if hasattr(func, "__name__"):
                         name = func.__name__
                     else:
                         name = str(func)
                     logging.error(f"An error happened with {name}({path})")
                     raise
-        else:
+        if flag:
             raise RuntimeError(f"Not supported: loader_type={loader_type}")
 
     def has_name(self, name) -> bool:
@@ -383,7 +389,9 @@ class ESPnetDataset(AbsDataset):
         _mes += f"\n  preprocess: {self.preprocess})"
         return _mes
 
-    def __getitem__(self, uid: Union[str, int]) -> Tuple[str, Dict[str, np.ndarray]]:
+    def __getitem__(
+        self, uid: Union[str, int]
+    ) -> Tuple[str, Dict[str, Union[np.ndarray, str]]]:
         assert check_argument_types()
 
         # Change integer-id to string-id
@@ -400,6 +408,9 @@ class ESPnetDataset(AbsDataset):
         for name, loader in self.loader_dict.items():
             try:
                 value = loader[uid]
+                # if self.preserve_lid:
+                #     lid = self.lid2int[value[0]]
+                #     value = value[1]
                 if isinstance(value, (list, tuple)):
                     value = np.array(value)
                 if not isinstance(
@@ -429,6 +440,8 @@ class ESPnetDataset(AbsDataset):
 
         # 3. Force data-precision
         for name in data:
+            if name == "lid":
+                continue
             value = data[name]
             if not isinstance(value, np.ndarray):
                 raise RuntimeError(
@@ -449,5 +462,6 @@ class ESPnetDataset(AbsDataset):
             self.cache[uid] = data
 
         retval = uid, data
+
         assert check_return_type(retval)
         return retval

@@ -4,6 +4,8 @@ from typing import Dict
 from typing import List
 from typing import Union
 
+from collections import OrderedDict
+
 from typeguard import check_argument_types
 
 
@@ -21,7 +23,7 @@ def read_2column_text(path: Union[Path, str]) -> Dict[str, str]:
     """
     assert check_argument_types()
 
-    data = {}
+    data = OrderedDict()
     with Path(path).open("r", encoding="utf-8") as f:
         for linenum, line in enumerate(f, 1):
             sps = line.rstrip().split(maxsplit=1)

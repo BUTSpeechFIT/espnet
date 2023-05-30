@@ -8,6 +8,7 @@
 
 import torch
 from torch import nn
+from typing import Union
 
 
 class LabelSmoothingLoss(nn.Module):
@@ -38,19 +39,27 @@ class LabelSmoothingLoss(nn.Module):
         self.true_dist = None
         self.normalize_length = normalize_length
 
-    def forward(self, x, target):
+    def forward(
+        self, x, target, target_mask: Union[None, torch.Tensor] = None
+    ):
         """Compute loss between x and target.
 
         :param torch.Tensor x: prediction (batch, seqlen, class)
         :param torch.Tensor target:
-            target signal masked with self.padding_id (batch, seqlen)
+          target signal masked with self.padding_id (batch, seqlen)
         :return: scalar float value
         :rtype torch.Tensor
         """
         assert x.size(2) == self.size
         batch_size = x.size(0)
-        x = x.view(-1, self.size)
-        target = target.view(-1)
+
+        if target_mask is not None:
+            x = x[target_mask]
+            target = target[target_mask]
+        else:
+            x = x.view(-1, self.size)
+            target = target.view(-1)
+
         with torch.no_grad():
             true_dist = x.clone()
             true_dist.fill_(self.smoothing / (self.size - 1))
@@ -61,3 +70,27 @@ class LabelSmoothingLoss(nn.Module):
         kl = self.criterion(torch.log_softmax(x, dim=1), true_dist)
         denom = total if self.normalize_length else batch_size
         return kl.masked_fill(ignore.unsqueeze(1), 0).sum() / denom
+
+
+if __name__ == "__main__":
+
+    n_classes = 5
+    bsize = 4
+    seq_len = 8
+
+    target = torch.randint(0, n_classes, size=(bsize, seq_len))
+
+    print('target:', target.size())
+
+    softmax = torch.nn.Softmax(dim=2)
+    x = softmax(torch.randn((bsize, seq_len, n_classes)))
+    print('x:', x.size(), torch.sum(x))
+    print(x[0, :2], torch.sum(x[0, :2], dim=1))
+
+    lsm = 0.1
+    padding_idx = 0
+
+    label_smoothing = LabelSmoothingLoss(n_classes, padding_idx, lsm)
+    loss = label_smoothing(x, target)
+
+    print('loss:', loss)

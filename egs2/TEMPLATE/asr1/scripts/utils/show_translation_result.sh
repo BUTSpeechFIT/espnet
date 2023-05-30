@@ -46,22 +46,23 @@ EOF
 
 metrics="bleu"
 
-while IFS= read -r expdir; do
-    if ls "${expdir}"/*/*/score_*/result.${case}.txt &> /dev/null; then
-        echo "## $(basename ${expdir})"
-        for type in $metrics; do
-                	cat << EOF
+for res_f in $(find ${exp}/ -maxdepth 5 -mindepth 1 -type f -name "result.${case}.txt"); do
+    exp_dir=$(echo "${res_f}" | awk -F"/" '{print $(NF-4)}')
+    echo "## ${exp_dir}"
+    for type in $metrics; do
+        cat << EOF
 ### ${type^^}
-
+- ${res_f}
 |dataset|bleu_score|verbose_score|
 |---|---|---|
 EOF
-    data=$(echo "${expdir}"/*/*/score_*/result.${case}.txt | cut -d '/' -f4)
-    bleu=$(sed -n '5p' "${expdir}"/*/*/score_*/result.${case}.txt | cut -d ' ' -f 3 | tr -d ',')
-    verbose=$(sed -n '7p' "${expdir}"/*/*/score_*/result.${case}.txt | cut -d ' ' -f 3- | tr -d '",')
-    echo "${data}|${bleu}|${verbose}"
+    data=$(echo ${res_f} | awk -F"/" '{print $(NF-2)}')
+    bleu=$(sed -n '5p' "${res_f}" | cut -d ' ' -f 3 | tr -d ',')
+    verbose=$(sed -n '7p' "${res_f}" | cut -d ' ' -f 3- | tr -d '",')
+    echo "|${data}|${bleu}|${verbose}|"
+    echo ""
 
-        done
-    fi
+    done
+    # fi
 
-done < <(find ${exp} -mindepth ${mindepth} -maxdepth ${maxdepth} -type d)
+done # < <(find ${exp} -mindepth ${mindepth} -maxdepth ${maxdepth} -type d)

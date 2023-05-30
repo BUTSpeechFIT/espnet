@@ -314,6 +314,8 @@ class Encoder(torch.nn.Module):
             (Conv2dSubsampling, Conv2dSubsampling6, Conv2dSubsampling8, VGG2L),
         ):
             xs, masks = self.embed(xs, masks)
+        elif self.embed is None:
+            pass
         else:
             xs = self.embed(xs)
 

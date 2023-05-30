@@ -135,6 +135,15 @@ local_score_opts=          # The options given to local/score.sh.
 mt_text_fold_length=150   # fold_length for text data during MT training.
 lm_fold_length=150         # fold_length for LM training.
 
+token_listdir=
+init_param=
+data_dir=
+tgt_bpedir=
+tgt_bpemodel=
+tgt_bpetoken_list=
+
+
+
 help_message=$(cat << EOF
 Usage: $0 --train-set "<train_set_name>" --valid-set "<valid_set_name>" --test_sets "<test_set_names>"
 
@@ -235,6 +244,12 @@ Options:
     --local_score_opts       # The options given to local/score.sh (default="{local_score_opts}").
     --mt_text_fold_length   # fold_length for text data during MT training (default="${mt_text_fold_length}").
     --lm_fold_length         # fold_length for LM training (default="${lm_fold_length}").
+    --init_param     # Init model params with one more models (eg: model1.pth:src_key:dest_key:exclude,model2.pth:src_key:dest_key:exclude)
+    --token_listdir
+    --data_dir
+    --tgt_bpedir
+    --tgt_bpemodel
+    --tgt_bpetoken_list
 EOF
 )
 
@@ -279,18 +294,32 @@ utt_extra_files="text.${src_case}.${src_lang} text.${tgt_case}.${tgt_lang}"
 # Use the text of the 1st evaldir if lm_test is not specified
 [ -z "${lm_test_text}" ] && lm_test_text="${data_feats}/${test_sets%% *}/text.${tgt_case}.${tgt_lang}"
 
-# Check tokenization type
-if [ "${lang}" != noinfo ]; then
-    token_listdir=data/${lang}_token_list
-else
-    token_listdir=data/token_list
+if [ -z "${token_listdir}" ]; then
+    # Check tokenization type
+    if [ "${lang}" != noinfo ]; then
+        token_listdir=${data_dir}/${lang}_token_list
+    else
+        token_listdir=${data_dir}/token_list
+    fi
 fi
-# The tgt bpedir is set for all cases when using bpe
-tgt_bpedir="${token_listdir}/tgt_bpe_${tgt_bpemode}${tgt_nbpe}"
+
+# Limitations of very long shell scripts - restricting users !
 tgt_bpeprefix="${tgt_bpedir}"/bpe
-tgt_bpemodel="${tgt_bpeprefix}".model
-tgt_bpetoken_list="${tgt_bpedir}"/tokens.txt
 tgt_chartoken_list="${token_listdir}"/char/tgt_tokens.txt
+
+
+if [ -z "${tgt_bpemodel}" ]; then
+
+    echo "token_listdir: "${token_listdir}
+    # The tgt bpedir is set for all cases when using bpe
+    tgt_bpedir="${token_listdir}/tgt_bpe_${tgt_bpemode}${tgt_nbpe}"
+    tgt_bpeprefix="${tgt_bpedir}"/bpe
+    tgt_bpemodel="${tgt_bpeprefix}".model
+    tgt_bpetoken_list="${tgt_bpedir}"/tokens.txt
+    tgt_chartoken_list="${token_listdir}"/char/tgt_tokens.txt
+
+fi
+
 if "${token_joint}"; then
     # if token_joint, the bpe training will use both src_lang and tgt_lang to train a single bpe model
     src_bpedir="${tgt_bpedir}"
@@ -452,15 +481,15 @@ fi
 
 if ! "${skip_data_prep}"; then
     if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
-        log "Stage 1: Data preparation for data/${train_set}, data/${valid_set}, etc."
+        log "Stage 1: Data preparation for ${data_dir}/${train_set}, ${data_dir}/${valid_set}, etc."
         # [Task dependent] Need to create data.sh for new corpus
         local/data.sh ${local_data_opts}
-        
+
     fi
 
     if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
         if [ "${feats_type}" = raw ]; then
-            log "Stage 2: data/ -> ${data_feats}"
+            log "Stage 2: ${data_dir}/ -> ${data_feats}"
 
             for dset in "${train_set}" "${valid_set}" ${test_sets}; do
                 if [ "${dset}" = "${train_set}" ] || [ "${dset}" = "${valid_set}" ]; then
@@ -472,9 +501,9 @@ if ! "${skip_data_prep}"; then
 
                 for extra_file in ${utt_extra_files}; do
                     # with regex to suuport multi-references
-                    for single_file in $(ls data/"${dset}"/${extra_file}*); do
+                    for single_file in $(ls ${data_dir}/"${dset}"/${extra_file}*); do
                         cp ${single_file} "${data_feats}${_suf}/${dset}"
-                    done 
+                    done
                 done
                 echo "${feats_type}" > "${data_feats}${_suf}/${dset}/feats_type"
             done
@@ -636,7 +665,8 @@ if ! "${skip_data_prep}"; then
                 # 0 is reserved for CTC-blank for MT and also used as ignore-index in the other task
                 ${python} -m espnet2.bin.tokenize_text  \
                     --token_type "${src_token_type}" \
-                    --input "${data_feats}/token_train.txt" --output "${src_token_list}" ${_opts} \
+                    --input "${data_feats}/token_train.txt" \
+                    --output "${src_token_list}" ${_opts} \
                     --field 2- \
                     --cleaner "${cleaner}" \
                     --g2p "${g2p}" \
@@ -845,7 +875,7 @@ if ! "${skip_train}"; then
         if "${use_ngram}"; then
             log "Stage 8: Ngram Training: train_set=${data_feats}/lm_train.txt"
             cut -f 2 -d " " ${data_feats}/lm_train.txt | lmplz -S "20%" --discount_fallback -o ${ngram_num} - >${ngram_exp}/${ngram_num}gram.arpa
-            build_binary -s ${ngram_exp}/${ngram_num}gram.arpa ${ngram_exp}/${ngram_num}gram.bin 
+            build_binary -s ${ngram_exp}/${ngram_num}gram.arpa ${ngram_exp}/${ngram_num}gram.bin
         else
             log "Stage 8: Skip ngram stages: use_ngram=${use_ngram}"
         fi
@@ -931,6 +961,10 @@ if ! "${skip_train}"; then
         # shellcheck disable=SC2086
         ${python} -m espnet2.bin.aggregate_stats_dirs ${_opts} --output_dir "${mt_stats_dir}"
 
+        # ANOTHER DIRTY PIECE OF SHIT CODE
+        # who writes this kind of shit
+        # why cant you write the below code in the above python code
+
         # Append the num-tokens at the last dimensions. This is used for batch-bins count
         <"${mt_stats_dir}/train/text_shape" \
             awk -v N="$(<${tgt_token_list} wc -l)" '{ print $0 "," N }' \
@@ -996,6 +1030,14 @@ if ! "${skip_train}"; then
             _opts+="--train_shape_file ${mt_stats_dir}/train/src_text_shape.${src_token_type} "
         fi
 
+        init_param_string=
+        if [ ! -z ${init_param} ]; then
+            #IFS="," read -r -a init_params <<< ${init_param}
+            init_param_string="--init_param ${init_param}"
+        fi
+
+        echo "init_param_string ${init_param_string}"
+
         log "Generate '${mt_exp}/run.sh'. You can resume the process from stage 10 using this script"
         mkdir -p "${mt_exp}"; echo "${run_args} --stage 10 \"\$@\"; exit \$?" > "${mt_exp}/run.sh"; chmod +x "${mt_exp}/run.sh"
 
@@ -1037,7 +1079,7 @@ if ! "${skip_train}"; then
                 --fold_length "${mt_text_fold_length}" \
                 --fold_length "${mt_text_fold_length}" \
                 --output_dir "${mt_exp}" \
-                ${_opts} ${mt_args}
+                ${_opts} ${mt_args} ${init_param_string}
 
     fi
 else
@@ -1205,7 +1247,7 @@ if ! "${skip_eval}"; then
             #                ) \
             #    <(<"${_data}/text.${tgt_case}.${tgt_lang}" awk '{ print "(" $2 "-" $1 ")" }') \
             #        >"${_scoredir}/hyp.trn.org"
-            
+
             # remove utterance id
             #perl -pe 's/\([^\)]+\)//g;' "${_scoredir}/ref.trn.org" > "${_scoredir}/ref.trn"
             #perl -pe 's/\([^\)]+\)//g;' "${_scoredir}/hyp.trn.org" > "${_scoredir}/hyp.trn"
@@ -1220,7 +1262,7 @@ if ! "${skip_eval}"; then
                           -i "${_scoredir}/hyp.trn.detok" \
                           -m bleu chrf ter \
                           >> ${_scoredir}/result.tc.txt
-                
+
                 log "Write a case-sensitive BLEU (single-reference) result in ${_scoredir}/result.tc.txt"
             fi
 
@@ -1235,7 +1277,7 @@ if ! "${skip_eval}"; then
             log "Write a case-insensitve BLEU (single-reference) result in ${_scoredir}/result.lc.txt"
 
             # process multi-references cases
-            multi_references=$(ls "${_data}/text.${tgt_case}.${tgt_lang}".* || echo "")
+            multi_references=$(find ${_data}/ -name "text.${tgt_case}.${tgt_lang}.*" || echo "")
             if [ "${multi_references}" != "" ]; then
                 case_sensitive_refs=""
                 case_insensitive_refs=""
@@ -1252,8 +1294,8 @@ if ! "${skip_eval}"; then
                                 ) \
                         <(<"${_data}/text.${tgt_case}.${tgt_lang}" awk '{ print "(" $2 "-" $1 ")" }') \
                             >"${_scoredir}/ref.trn.org.${ref_idx}"
-                    
-                    # 
+
+                    #
                     perl -pe 's/\([^\)]+\)//g;' "${_scoredir}/ref.trn.org.${ref_idx}" > "${_scoredir}/ref.trn.${ref_idx}"
                     detokenizer.perl -l ${tgt_lang} -q < "${_scoredir}/ref.trn.${ref_idx}" > "${_scoredir}/ref.trn.detok.${ref_idx}"
                     remove_punctuation.pl < "${_scoredir}/ref.trn.detok.${ref_idx}" > "${_scoredir}/ref.trn.detok.lc.rm.${ref_idx}"
@@ -1279,7 +1321,7 @@ if ! "${skip_eval}"; then
 
         # Show results in Markdown syntax
         scripts/utils/show_translation_result.sh --case $tgt_case "${mt_exp}" > "${mt_exp}"/RESULTS.md
-        cat "${cat_exp}"/RESULTS.md
+        cat "${mt_exp}"/RESULTS.md
     fi
 else
     log "Skip the evaluation stages"
@@ -1386,11 +1428,11 @@ if ! "${skip_upload_hf}"; then
         gitlfs=$(git lfs --version 2> /dev/null || true)
         [ -z "${gitlfs}" ] && \
             log "ERROR: You need to install git-lfs first" && \
-            exit 1             
-  
+            exit 1
+
         dir_repo=${expdir}/hf_${hf_repo//"/"/"_"}
         [ ! -d "${dir_repo}" ] && git clone https://huggingface.co/${hf_repo} ${dir_repo}
-  
+
         if command -v git &> /dev/null; then
             _creator_name="$(git config user.name)"
             _checkout="git checkout $(git show -s --format=%H)"
@@ -1403,13 +1445,13 @@ if ! "${skip_upload_hf}"; then
         # foo/asr1 -> foo
         _corpus="${_task%/*}"
         _model_name="${_creator_name}/${_corpus}_$(basename ${packed_model} .zip)"
-  
+
         # copy files in ${dir_repo}
         unzip -o ${packed_model} -d ${dir_repo}
         # Generate description file
         # shellcheck disable=SC2034
         hf_task=machine-translation
-        # shellcheck disable=SC2034     
+        # shellcheck disable=SC2034
         espnet_task=MT
         # shellcheck disable=SC2034
         task_exp=${mt_exp}

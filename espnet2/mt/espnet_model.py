@@ -38,7 +38,7 @@ class ESPnetMTModel(AbsESPnetModel):
 
     def __init__(
         self,
-        vocab_size: int,
+        vocab_size: Union[int, Dict[str, int]],
         token_list: Union[Tuple[str, ...], List[str]],
         frontend: Optional[AbsFrontend],
         preencoder: Optional[AbsPreEncoder],

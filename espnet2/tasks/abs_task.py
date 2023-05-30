@@ -1,22 +1,20 @@
 """Abstract task module."""
-from abc import ABC
-from abc import abstractmethod
 import argparse
-from dataclasses import dataclass
-from distutils.version import LooseVersion
 import functools
 import logging
 import os
-from pathlib import Path
+import random
+import shutil
+import string
 import sys
-from typing import Any
-from typing import Callable
-from typing import Dict
-from typing import List
-from typing import Optional
-from typing import Sequence
-from typing import Tuple
-from typing import Union
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from datetime import datetime
+from distutils.version import LooseVersion
+from glob import glob
+from pathlib import Path, PurePath
+from time import time
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import humanfriendly
 import numpy as np
@@ -24,21 +22,20 @@ import torch
 import torch.multiprocessing
 import torch.nn
 import torch.optim
-from torch.utils.data import DataLoader
-from typeguard import check_argument_types
-from typeguard import check_return_type
 import yaml
-
 from espnet import __version__
 from espnet.utils.cli_utils import get_commandline_args
+from torch.utils.data import DataLoader
+from typeguard import check_argument_types, check_return_type
+
+from espnet2.fileio.read_text import read_2column_text
 from espnet2.iterators.abs_iter_factory import AbsIterFactory
 from espnet2.iterators.chunk_iter_factory import ChunkIterFactory
 from espnet2.iterators.multiple_iter_factory import MultipleIterFactory
 from espnet2.iterators.sequence_iter_factory import SequenceIterFactory
 from espnet2.main_funcs.collect_stats import collect_stats
 from espnet2.optimizers.sgd import SGD
-from espnet2.samplers.build_batch_sampler import BATCH_TYPES
-from espnet2.samplers.build_batch_sampler import build_batch_sampler
+from espnet2.samplers.build_batch_sampler import BATCH_TYPES, build_batch_sampler
 from espnet2.samplers.unsorted_batch_sampler import UnsortedBatchSampler
 from espnet2.schedulers.noam_lr import NoamLR
 from espnet2.schedulers.warmup_lr import WarmupLR
@@ -48,27 +45,29 @@ from espnet2.torch_utils.pytorch_version import pytorch_cudnn_version
 from espnet2.torch_utils.set_all_random_seed import set_all_random_seed
 from espnet2.train.abs_espnet_model import AbsESPnetModel
 from espnet2.train.class_choices import ClassChoices
-from espnet2.train.dataset import AbsDataset
-from espnet2.train.dataset import DATA_TYPES
-from espnet2.train.dataset import ESPnetDataset
-from espnet2.train.distributed_utils import DistributedOption
-from espnet2.train.distributed_utils import free_port
-from espnet2.train.distributed_utils import get_master_port
-from espnet2.train.distributed_utils import get_node_rank
-from espnet2.train.distributed_utils import get_num_nodes
-from espnet2.train.distributed_utils import resolve_distributed_mode
+from espnet2.train.dataset import DATA_TYPES, AbsDataset, ESPnetDataset
+from espnet2.train.distributed_utils import (
+    DistributedOption,
+    free_port,
+    get_master_port,
+    get_node_rank,
+    get_num_nodes,
+    resolve_distributed_mode,
+)
 from espnet2.train.iterable_dataset import IterableESPnetDataset
 from espnet2.train.trainer import Trainer
-from espnet2.utils.build_dataclass import build_dataclass
 from espnet2.utils import config_argparse
+from espnet2.utils.build_dataclass import build_dataclass
 from espnet2.utils.get_default_kwargs import get_default_kwargs
 from espnet2.utils.nested_dict_action import NestedDictAction
-from espnet2.utils.types import humanfriendly_parse_size_or_none
-from espnet2.utils.types import int_or_none
-from espnet2.utils.types import str2bool
-from espnet2.utils.types import str2triple_str
-from espnet2.utils.types import str_or_int
-from espnet2.utils.types import str_or_none
+from espnet2.utils.types import (
+    humanfriendly_parse_size_or_none,
+    int_or_none,
+    str2bool,
+    str2triple_str,
+    str_or_int,
+    str_or_none,
+)
 from espnet2.utils.yaml_no_alias_safe_dump import yaml_no_alias_safe_dump
 
 try:
@@ -285,6 +284,47 @@ class AbsTask(ABC):
         parser.set_defaults(required=["output_dir"])
 
         group = parser.add_argument_group("Common configuration")
+
+        group.add_argument(
+            "--input_token_list_ftype",
+            type=str,
+            default="token_list",
+            choices=["token_list", "token_flist"],
+            help="File type of files in token_list directory, 'token_list' for default files, \
+                'token_flist' for files containing lid and path.",
+        )
+
+        group.add_argument(
+            "--copy_feats_to_dir",
+            default=None,
+            type=str_or_none,
+            nargs="?",
+            help="Copies input feats (eg: fbank ark files) to the given dir, \
+and updates the path in feats.scp, train_data_path_and_name_and_type. \
+This should avoid reading from disk server every time and thus prevent \
+any disk IO bottlenecks.",
+        )
+        group.add_argument(
+            "--recopy",
+            default=False,
+            action="store_true",
+            help="Recopies the feats to dir, even if they are present",
+        )
+
+        group.add_argument(
+            "--safe_gpu",
+            action="store_true",
+            help="Use safe_gpu package to acquire free GPUs and set CUDA_VISIBLE_DEVICES.\
+When using this option, other ways to set CUDA_VISIBLE_DEVICES must not be used.",
+        )
+        group.add_argument(
+            "--langs_in_token2int",
+            default=[],
+            type=str,
+            help="Lang IDs that were used in tokens.txt. This arg is mandatory wen training"
+            + "multilingual model with a shared vocabulary. The vocab also contains the "
+            + "lang IDs as tokens. For example: [cs],[en],[fr],[hi],[te],[yo]",
+        )
 
         group.add_argument(
             "--print_config",
@@ -853,6 +893,123 @@ class AbsTask(ABC):
         return parser
 
     @classmethod
+    def copy_feats_to_dir(cls, args: argparse.Namespace) -> None:
+        """Copies feats to the given dir (eg: /tmp/ in local machine
+        or /mnt/ssd/), and updates the  path in feats.scp,
+        train_data_path_and_name_and_type ..."""
+
+        user = os.environ.get("USER", "unk")
+
+        base_dir = Path(args.copy_feats_to_dir) / user
+        base_dir.mkdir(parents=True, exist_ok=True)
+
+        #  dict where key is local feat dir, value is empty lock file indicating reading
+        args.local_feat_dirs = {}
+
+        for i, tupl in enumerate(args.train_data_path_and_name_and_type):
+            _path, _name, _type = tupl
+
+            set_path = PurePath(_path)
+            if _name == "speech" and _type == "kaldi_ark":
+
+                sub_dir = base_dir / set_path.parent.name
+                sub_dir.mkdir(parents=True, exist_ok=True)
+                logging.info("Created directory {:s}".format(str(sub_dir)))
+
+                now = datetime.now()
+                time_str = now.strftime("%H%M%S_%f")
+                lock_fname = sub_dir / f"read_lock_{time_str}"
+                open(lock_fname, "w").close()
+                args.local_feat_dirs[sub_dir] = lock_fname
+                logging.info("Created read_lock file: {:s}".format(str(lock_fname)))
+
+                logging.info(
+                    f"Copying {_type} feats to local feat dir: " + str(sub_dir)
+                )
+
+                data = read_2column_text(_path)
+
+                uniq_ark = {}  # {utt_id: [src_path, tgt_path], ...}
+
+                new_data = []
+                for utt_id, ark_line in data.items():
+
+                    src_ark_path, sfx = ark_line.rsplit(":", maxsplit=1)
+                    ark_base = PurePath(src_ark_path).name
+
+                    new_ark_path = sub_dir / ark_base
+                    new_data.append(f"{utt_id} {new_ark_path}:{sfx}")
+
+                    if ark_base not in uniq_ark:
+                        uniq_ark[ark_base] = [src_ark_path, str(new_ark_path)]
+
+                n_copied = 1
+                stime = time()
+                for ark_base, (src_path, tgt_path) in uniq_ark.items():
+                    # one ark file contains feats to many utts
+                    if (os.path.exists(new_ark_path) is False) or (args.recopy is True):
+                        shutil.copyfile(src_path, tgt_path)
+                        logging.info(
+                            "{:4d}/{:4d} Copied: {:s} -> {:s}".format(
+                                n_copied,
+                                len(uniq_ark),
+                                src_path,
+                                tgt_path,
+                            )
+                        )
+                    else:
+                        logging.info(
+                            "{:s} already present. Not copying it again.".format(
+                                tgt_path
+                            )
+                        )
+                    n_copied += 1
+
+                logging.info(
+                    "Copying done in {:.2f} minutes".format((time() - stime) / 60.0)
+                )
+                new_feats_scp_file = sub_dir / "feats.scp"
+
+                if Path(set_path.parent, "utt2category").exists():
+                    utt2category_file = str(Path(set_path.parent, "utt2category"))
+                    tgt_utt2cat_file = sub_dir / "utt2category"
+                    shutil.copyfile(utt2category_file, str(tgt_utt2cat_file))
+                    logging.info(
+                        "Copied: {:s} -> {:s}".format(
+                            utt2category_file, str(tgt_utt2cat_file)
+                        )
+                    )
+
+                with open(new_feats_scp_file, "w") as fpw:
+                    fpw.write("\n".join(new_data) + "\n")
+
+                args.train_data_path_and_name_and_type[i] = (
+                    str(new_feats_scp_file),
+                    _name,
+                    _type,
+                )
+
+    @classmethod
+    def remove_temp_feats_dir(cls, args: argparse.Namespace) -> None:
+        """Remove local feats dir where feats were copied"""
+
+        for local_feat_dir, lock_fname in args.local_feat_dirs.items():
+            if os.path.exists(lock_fname):
+                # remove the read_lock file created by this job
+                os.remove(lock_fname)
+                logging.info("Removed lock file: " + str(lock_fname))
+                lock_files = glob(str(local_feat_dir) + "/read_lock_*")
+                if len(lock_files) == 0:
+                    shutil.rmtree(str(local_feat_dir))
+                    logging.info("Removed local feat dir : " + str(local_feat_dir))
+                else:
+                    logging.info(
+                        "Not removing local feat dir {:s}. {:d} other read_lock file(s) were found.".format(
+                            str(local_feat_dir), len(lock_files)
+                        )
+                    )
+
+    @classmethod
     def build_optimizers(
         cls,
         args: argparse.Namespace,
@@ -1002,6 +1159,7 @@ class AbsTask(ABC):
     def main(cls, args: argparse.Namespace = None, cmd: Sequence[str] = None):
         assert check_argument_types()
         print(get_commandline_args(), file=sys.stderr)
+
         if args is None:
             parser = cls.get_parser()
             args = parser.parse_args(cmd)
@@ -1012,6 +1170,14 @@ class AbsTask(ABC):
             cls.print_config()
             sys.exit(0)
         cls.check_required_command_args(args)
+
+        if args.safe_gpu:
+            from safe_gpu import safe_gpu
+
+            gpu_owner = safe_gpu.GPUOwner(
+                nb_gpus=args.ngpu, logger=None, placeholder_fn=None
+            )
+            print("env CUDA_VISIBLE_DEVICES=", os.environ.get("CUDA_VISIBLE_DEVICES"))
 
         # "distributed" is decided using the other command args
         resolve_distributed_mode(args)
@@ -1192,7 +1358,6 @@ class AbsTask(ABC):
                 valid_key_file = args.valid_shape_file[0]
             else:
                 valid_key_file = None
-
             collect_stats(
                 model=model,
                 train_iter=cls.build_streaming_iterator(
@@ -1236,6 +1401,9 @@ class AbsTask(ABC):
                     if args.ngpu > 0
                     else "cpu",
                 )
+
+            if args.copy_feats_to_dir:
+                cls.copy_feats_to_dir(args)
 
             # 7. Build iterator factories
             if args.multiple_iterator:
@@ -1300,7 +1468,7 @@ class AbsTask(ABC):
                         name=name,
                         dir=output_dir,
                         id=args.wandb_id,
-                        resume="allow",
+                        resume=args.resume,
                     )
                     wandb.config.update(args)
                 else:
@@ -1323,8 +1491,11 @@ class AbsTask(ABC):
                 distributed_option=distributed_option,
             )
 
-            if wandb.run:
+            if args.use_wandb and wandb.run:
                 wandb.finish()
+
+            if args.copy_feats_to_dir:
+                cls.remove_temp_feats_dir(args)
 
     @classmethod
     def build_iter_options(

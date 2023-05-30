@@ -1,40 +1,38 @@
 import argparse
 import logging
-from typing import Callable
-from typing import Collection
-from typing import Dict
-from typing import List
-from typing import Optional
-from typing import Tuple
+from typing import Callable, Collection, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-from typeguard import check_argument_types
-from typeguard import check_return_type
+from typeguard import check_argument_types, check_return_type
 
 from espnet2.asr.ctc import CTC
 from espnet2.asr.decoder.abs_decoder import AbsDecoder
 from espnet2.asr.decoder.rnn_decoder import RNNDecoder
 from espnet2.asr.decoder.transformer_decoder import (
-    DynamicConvolution2DTransformerDecoder,  # noqa: H301
-)
-from espnet2.asr.decoder.transformer_decoder import DynamicConvolutionTransformerDecoder
+    DynamicConvolution2DTransformerDecoder,
+)  # noqa: H301
 from espnet2.asr.decoder.transformer_decoder import (
-    LightweightConvolution2DTransformerDecoder,  # noqa: H301
-)
+    LightweightConvolution2DTransformerDecoder,
+)  # noqa: H301
 from espnet2.asr.decoder.transformer_decoder import (
-    LightweightConvolutionTransformerDecoder,  # noqa: H301
+    LightweightConvolutionTransformerDecoder,
+)  # noqa: H301
+from espnet2.asr.decoder.transformer_decoder import (
+    DynamicConvolutionTransformerDecoder,
+    TransformerDecoder,
 )
-from espnet2.asr.decoder.transformer_decoder import TransformerDecoder
 from espnet2.asr.encoder.abs_encoder import AbsEncoder
 from espnet2.asr.encoder.conformer_encoder import ConformerEncoder
-from espnet2.asr.encoder.hubert_encoder import FairseqHubertEncoder
-from espnet2.asr.encoder.hubert_encoder import FairseqHubertPretrainEncoder
+from espnet2.asr.encoder.contextual_block_transformer_encoder import (
+    ContextualBlockTransformerEncoder,
+)  # noqa: H301
+from espnet2.asr.encoder.hubert_encoder import (
+    FairseqHubertEncoder,
+    FairseqHubertPretrainEncoder,
+)
 from espnet2.asr.encoder.rnn_encoder import RNNEncoder
 from espnet2.asr.encoder.transformer_encoder import TransformerEncoder
-from espnet2.asr.encoder.contextual_block_transformer_encoder import (
-    ContextualBlockTransformerEncoder,  # noqa: H301
-)
 from espnet2.asr.encoder.vgg_rnn_encoder import VGGRNNEncoder
 from espnet2.asr.encoder.wav2vec2_encoder import FairSeqWav2Vec2Encoder
 from espnet2.asr.frontend.abs_frontend import AbsFrontend
@@ -43,8 +41,8 @@ from espnet2.asr.frontend.s3prl import S3prlFrontend
 from espnet2.asr.frontend.windowing import SlidingWindow
 from espnet2.asr.postencoder.abs_postencoder import AbsPostEncoder
 from espnet2.asr.postencoder.hugging_face_transformers_postencoder import (
-    HuggingFaceTransformersPostEncoder,  # noqa: H301
-)
+    HuggingFaceTransformersPostEncoder,
+)  # noqa: H301
 from espnet2.asr.preencoder.abs_preencoder import AbsPreEncoder
 from espnet2.asr.preencoder.linear import LinearProjection
 from espnet2.asr.preencoder.sinc import LightweightSincConvs
@@ -63,10 +61,7 @@ from espnet2.train.preprocessor import MutliTokenizerCommonPreprocessor
 from espnet2.train.trainer import Trainer
 from espnet2.utils.get_default_kwargs import get_default_kwargs
 from espnet2.utils.nested_dict_action import NestedDictAction
-from espnet2.utils.types import float_or_none
-from espnet2.utils.types import int_or_none
-from espnet2.utils.types import str2bool
-from espnet2.utils.types import str_or_none
+from espnet2.utils.types import float_or_none, int_or_none, str2bool, str_or_none
 
 frontend_choices = ClassChoices(
     name="frontend",
@@ -137,7 +132,7 @@ decoder_choices = ClassChoices(
         lightweight_conv2d=LightweightConvolution2DTransformerDecoder,
         dynamic_conv=DynamicConvolutionTransformerDecoder,
         dynamic_conv2d=DynamicConvolution2DTransformerDecoder,
-        rnn=RNNDecoder,
+        rnn=TransformerDecoder,
     ),
     type_check=AbsDecoder,
     default="rnn",
@@ -150,7 +145,7 @@ extra_asr_decoder_choices = ClassChoices(
         lightweight_conv2d=LightweightConvolution2DTransformerDecoder,
         dynamic_conv=DynamicConvolutionTransformerDecoder,
         dynamic_conv2d=DynamicConvolution2DTransformerDecoder,
-        rnn=RNNDecoder,
+        rnn=TransformerDecoder,
     ),
     type_check=AbsDecoder,
     default="rnn",
@@ -163,7 +158,7 @@ extra_mt_decoder_choices = ClassChoices(
         lightweight_conv2d=LightweightConvolution2DTransformerDecoder,
         dynamic_conv=DynamicConvolutionTransformerDecoder,
         dynamic_conv2d=DynamicConvolution2DTransformerDecoder,
-        rnn=RNNDecoder,
+        rnn=TransformerDecoder,
     ),
     type_check=AbsDecoder,
     default="rnn",
@@ -206,7 +201,7 @@ class STTask(AbsTask):
         # NOTE(kamo): add_arguments(..., required=True) can't be used
         # to provide --print_config mode. Instead of it, do as
         required = parser.get_default("required")
-        required += ["src_token_list", "token_list"]
+        required += ["token_list"]
 
         group.add_argument(
             "--token_list",
@@ -271,9 +266,9 @@ class STTask(AbsTask):
         )
         group.add_argument(
             "--src_token_type",
-            type=str,
+            type=str_or_none,
             default="bpe",
-            choices=["bpe", "char", "word", "phn"],
+            choices=["bpe", "char", "word", "phn", None],
             help="The source text will be tokenized " "in the specified level token",
         )
         group.add_argument(
@@ -371,6 +366,7 @@ class STTask(AbsTask):
                 token_type=[args.token_type, args.src_token_type],
                 token_list=[args.token_list, args.src_token_list],
                 bpemodel=[args.bpemodel, args.src_bpemodel],
+                input_token_list_ftype=args.input_token_list_ftype,
                 non_linguistic_symbols=args.non_linguistic_symbols,
                 text_cleaner=args.cleaner,
                 g2p_type=args.g2p,
@@ -413,9 +409,9 @@ class STTask(AbsTask):
         cls, train: bool = True, inference: bool = False
     ) -> Tuple[str, ...]:
         if not inference:
-            retval = ("src_text",)
+            retval = ("src_text", "lid")
         else:
-            retval = ()
+            retval = ("lid",)
         assert check_return_type(retval)
         return retval
 
@@ -423,33 +419,88 @@ class STTask(AbsTask):
     def build_model(cls, args: argparse.Namespace) -> ESPnetSTModel:
         assert check_argument_types()
         if isinstance(args.token_list, str):
-            with open(args.token_list, encoding="utf-8") as f:
-                token_list = [line.rstrip() for line in f]
+            if args.input_token_list_ftype == "token_list":
+                with open(args.token_list, encoding="utf-8") as f:
+                    token_list = [line.rstrip() for line in f]
 
-            # Overwriting token_list to keep it as "portable".
-            args.token_list = list(token_list)
+                # Overwriting token_list to keep it as "portable".
+                args.token_list = list(token_list)
+            else:
+                token_list = {}
+                vocab_size = {}
+                with open(args.token_list, encoding="utf-8") as f:
+                    for line in f:
+                        # read language ID and corresponding token_list
+                        lid, path = line.rstrip("\n").split(" ")
+
+                        with open(path, encoding="utf-8") as token_list_file:
+                            token_list[lid] = [
+                                line.rstrip() for line in token_list_file
+                            ]
+                            vocab_size[lid] = len(token_list[lid])
+
+                # Overwriting token_list to keep it as "portable".
+                args.token_list = token_list
+
         elif isinstance(args.token_list, (tuple, list)):
             token_list = list(args.token_list)
+        elif isinstance(args.token_list, dict):
+            token_list = args.token_list
+            vocab_size = {}
+            for lid, vocab in token_list.items():
+                vocab_size[lid] = len(vocab)
         else:
-            raise RuntimeError("token_list must be str or list")
-        vocab_size = len(token_list)
+            raise RuntimeError(
+                f"token_list must be str or list or dict. Found {type(args.token_list)}"
+            )
+
+        if args.input_token_list_ftype == "token_list":
+            vocab_size = len(token_list)
+
         logging.info(f"Vocabulary size: {vocab_size }")
 
         if args.src_token_list is not None:
             if isinstance(args.src_token_list, str):
-                with open(args.src_token_list, encoding="utf-8") as f:
-                    src_token_list = [line.rstrip() for line in f]
+                if args.input_token_list_ftype == "token_list":
+                    with open(args.src_token_list, encoding="utf-8") as f:
+                        src_token_list = [line.rstrip() for line in f]
 
-                # Overwriting src_token_list to keep it as "portable".
-                args.src_token_list = list(src_token_list)
+                    # Overwriting src_token_list to keep it as "portable".
+                    args.src_token_list = list(src_token_list)
+                else:
+                    src_token_list = {}
+                    src_vocab_size = {}
+                    with open(args.src_token_list, encoding="utf-8") as f:
+                        for line in f:
+                            # read language ID and corresponding token_list
+                            lid, path = line.rstrip("\n").split(" ")
+
+                            with open(path, encoding="utf-8") as token_list_file:
+                                src_token_list[lid] = [
+                                    line.rstrip() for line in token_list_file
+                                ]
+                                src_vocab_size[lid] = len(src_token_list[lid])
+
+                    # Overwriting token_list to keep it as "portable".
+                    args.src_token_list = src_token_list
+
             elif isinstance(args.src_token_list, (tuple, list)):
                 src_token_list = list(args.src_token_list)
+            elif isinstance(args.src_token_list, dict):
+                src_token_list = args.src_token_list
+                src_vocab_size = {}
+                for lid, vocab in src_token_list.items():
+                    src_vocab_size[lid] = len(vocab)
             else:
-                raise RuntimeError("token_list must be str or list")
-            src_vocab_size = len(src_token_list)
+                raise RuntimeError(
+                    f"src_token_list must be str or list or dict. Found {type(args.src_token_list)}"
+                )
+
+            if args.input_token_list_ftype == "token_list":
+                src_vocab_size = len(src_token_list)
             logging.info(f"Source vocabulary size: {src_vocab_size }")
         else:
-            src_token_list, src_vocab_size = None, None
+            src_token_list, src_vocab_size = None, 0
 
         # 1. frontend
         if args.input_size is None:
@@ -514,11 +565,20 @@ class STTask(AbsTask):
 
         # 6. CTC
         if src_token_list is not None:
-            ctc = CTC(
-                odim=src_vocab_size,
-                encoder_output_size=encoder_output_size,
-                **args.ctc_conf,
-            )
+            if isinstance(src_vocab_size, dict):
+                ctc = torch.nn.ModuleDict()
+                for lid, vsize in src_vocab_size.items():
+                    ctc[lid] = CTC(
+                        odim=src_vocab_size[lid],
+                        encoder_output_size=encoder_output_size,
+                        **args.ctc_conf,
+                    )
+            else:
+                ctc = CTC(
+                    odim=src_vocab_size,
+                    encoder_output_size=encoder_output_size,
+                    **args.ctc_conf,
+                )
         else:
             ctc = None
 
