@@ -35,7 +35,7 @@ This is inline with the Interspeech'23 paper.
     done
     ```
 
-3. For each language extract features, learn BPE, optionally train monolingual ASR models. This follows a standard ESPnet2 recipe. An example is below:
+3. For each language, extract features, learn BPE, optionally train monolingual ASR models and decode. This follows a standard ESPnet2 recipe. An example is below:
 
     ```bash
     for lang in ${LANGS[@]}; do
@@ -49,13 +49,45 @@ This is inline with the Interspeech'23 paper.
     done
     ```
 
+    - Optional training of monolingual models
+
+    ```bash
+    for lang in ${LANGS[@]}; do
+        ./run.sh data_subset/ \
+                ${lang}.tc \
+                conf/train_asr_ctc0.9.yaml \
+                1000 \
+                token_list/${lang}.50.tc/ \
+                exp/asr_${lang}.50.tc_12L_256d_6L_0.1d_0.9ctc_200e/ \
+                10 11
+    done
+    ```
+
+    - Optional decode and score monolingual models
+
+    ```bash
+    for lang in ${LANGS[@]}; do
+        ./run.sh data_subset/ \
+                ${lang}.tc \
+                conf/train_asr_ctc0.9.yaml \
+                1000 \
+                token_list/${lang}.50.tc/ \
+                exp/asr_${lang}.50.tc_12L_256d_6L_0.1d_0.9ctc_200e/ \
+                12 13
+    done
+    ```
+
 4. Create multilingual training set by reusing the above monolingual features and BPE models
 
     - Making sure that each language dir has `lid.scp` `utt2category` and `utt2lang`
 
     ```bash
-    for lang in ${LANGS[@]}; do
-        pyscripts/utils/create_lid_scp.py dump/fbank_pitch/train_${lang}.tc/utt2spk ${lang}
+    for set_name in train dev; do
+      for lang in ${LANGS[@]}; do
+          pyscripts/utils/create_lid_scp.py \
+            dump/fbank_pitch/${set_name}_${lang}.tc/utt2spk \
+            ${lang}
+      done
     done
     ```
 
@@ -114,7 +146,10 @@ This is inline with the Interspeech'23 paper.
 
    ```bash
    for lang in ${LANGS[@]}; do
-      ./run_asr_multiling.sh 6L.300.tc 1000 conf/train_asr_ctc0.3.yaml \
+      ./run_asr_multiling.sh \
+        6L.300.tc \
+        1000 \
+        conf/train_asr_ctc0.3.yaml \
         exp/masr_6L.300.tc_1000nbpe_12L_256d_6L_0.1d_0.3ctc_100e/ \
         decode \
         ${lang}.tc
@@ -125,7 +160,10 @@ This is inline with the Interspeech'23 paper.
 
    ```bash
    for lang in ${LANGS[@]}; do
-      ./run_asr_multiling.sh 6L.300.tc 1000 conf/train_asr_ctc0.3.yaml \
+      ./run_asr_multiling.sh \
+        6L.300.tc \
+        1000 \
+        conf/train_asr_ctc0.3.yaml \
         exp/masr_6L.300.tc_1000nbpe_12L_256d_6L_0.1d_0.3ctc_100e/ \
         decode \
         ${lang}.tc \
