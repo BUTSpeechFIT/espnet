@@ -39,7 +39,7 @@ for d in 0.1 0.3 ; do
         --feats_type fbank_pitch \
         --token_joint true \
         --stage 12 \
-        --stop_stage 12 \
+        --stop_stage 13 \
         --datadir data \
         --dumpdir dump \
         --st_exp ${st_exp} \
