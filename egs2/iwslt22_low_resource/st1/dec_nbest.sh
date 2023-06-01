@@ -30,8 +30,8 @@ tgt_lang=fr
 bpemodel=$(grep -E "^bpemodel:" "${st_config}" | awk -F": " '{print $NF}')
 bpedir=$(dirname ${bpemodel})
 
-# d: is the CTC weight for joint decoding. higher weights result in worse results.
-for d in 0.1 0.3 ; do
+# beta: is the CTC weight for joint decoding. weights > 0.3 result in worse results.
+for beta in 0.1 0.3; do
     ./st.sh \
         --ngpu 0 \
         --inference_nj ${nj} \
@@ -63,6 +63,6 @@ for d in 0.1 0.3 ; do
         --multilingual_mode true \
         --input_token_list_ftype token_flist \
         --lid ${tgt_lang} \
-        --inference_tag "decode_st_ctc_${d}_${nbest}best" \
-        --inference_args "--ctc_weight ${d} --nbest ${nbest}"
+        --inference_tag "decode_st_ctc_${beta}_${nbest}best" \
+        --inference_args "--ctc_weight ${beta} --nbest ${nbest}"
 done
