@@ -184,6 +184,7 @@ This is inline with the Interspeech'23 paper.
   year      = 2023,
   booktitle = {Proc. INTERSPEECH 2023},
   pages     = {2148--2152},
+  address   = {Dublin, Ireland},
   doi       = {10.21437/Interspeech.2023-2506}
 }
 
