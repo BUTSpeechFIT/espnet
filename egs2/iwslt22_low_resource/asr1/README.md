@@ -19,7 +19,7 @@ This is inline with the Interspeech'23 paper.
 
     for lang in ${LANGS[@]}; do
         pyscripts/utils/create_train_subset.py \
-          data/train_${lang}.tc/ \
+          data/train_${lang}/ \
           subset_uttids/${lang}/train.utt2spk \
           data_subset/train_${lang}.tc/
     done
@@ -30,7 +30,7 @@ This is inline with the Interspeech'23 paper.
     ```bash
     for lang in ${LANGS[@]}; do
         for set_name in dev test; do
-            ln -svf $(realpath data/${set_name}_${lang}.tc) data_subset/ ;
+            ln -svf $(realpath data/${set_name}_${lang}) data_subset/${set_name}_${lang}.tc ;
         done
     done
     ```
