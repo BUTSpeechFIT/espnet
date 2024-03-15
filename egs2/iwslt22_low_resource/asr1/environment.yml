@@ -325,7 +325,6 @@ dependencies:
       - pyparsing==3.0.9
       - pypinyin==0.44.0
       - pyrsistent==0.19.2
-      - pysptk==0.2.0
       - pystoi==0.3.3
       - pytorch-ranger==0.1.1
       - pytorch-wpe==0.0.1
@@ -362,4 +361,3 @@ dependencies:
       - wandb==0.13.6
       - werkzeug==2.2.2
       - youtube-dl==2021.12.17
-prefix: /mnt/matylda4/kesiraju/tools/espnet/tools/anaconda/envs/espnet

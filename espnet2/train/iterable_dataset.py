@@ -187,8 +187,9 @@ class IterableESPnetDataset(IterableDataset):
                 for k_idx, k in enumerate(keys):
                     if k != keys[0]:
                         raise RuntimeError(
-                            f"Keys are mismatched. Text files (idx={k_idx}) is "
-                            f"not sorted or not having same keys at L{linenum}"
+                            f"Keys are mismatched. {f} files (idx={k_idx}) is "
+                            f"not sorted or not having same keys at L{linenum}. "
+                            "Use utils/data/fix_data_dir.sh to fix and sort."
                         )
 
                 # If the key is matched, break the loop

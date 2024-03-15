@@ -73,6 +73,16 @@
       --utt2category hi mr
     ```
 
+    - Fix/sort files based on utternace IDs in both train_hi_mr and dev_hi_mr directories
+
+    ```bash
+    utils/data/fix_data_dir.sh dump/fbank_pitch/train_hi_mr
+    ```
+
+    ```bash
+    utils/data/fix_data_dir.sh dump/fbank_pitch/dev_hi_mr
+    ```
+
     - Create BPE flist, by combining the BPEs of monolingual parts
 
     ```python3
