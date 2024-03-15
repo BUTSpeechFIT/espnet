@@ -172,7 +172,6 @@ class Speech2Text:
                 vocab_size=len(token_list),
                 token_list=token_list,
                 pre_beam_score_key=None if ctc_weight == 1.0 else "full",
-                lid_as_prompt=self.lid_as_prompt
             )
             # TODO(karita): make all scorers batchfied
             if batch_size == 1:
@@ -422,7 +421,6 @@ def inference(
         streaming=streaming,
         enh_s2t_task=enh_s2t_task,
         lid=lid,
-        lid_as_prompt=lid_as_prompt,
     )
     speech2text = Speech2Text.from_pretrained(
         model_tag=model_tag, **speech2text_kwargs,
