@@ -130,9 +130,9 @@ def main():
             print(out_file, "saved.")
 
         if args.utt2category:
-            utt2cat_file = os.path.join(args.out_dir, "utt2category")
+            utt2cat_file = os.path.join(args.out_dir, "utt2lang")
             if not os.path.exists(utt2cat_file):
-                print(len(utt2cat), "utt2category", end="\t")
+                print(len(utt2cat), "utt2lang", end="\t")
                 with open(utt2cat_file, "w", encoding="utf-8") as fpw:
                     fpw.write("\n".join(utt2cat))
                 print(utt2cat_file, "saved.")
@@ -183,16 +183,16 @@ def parse_arguments():
         default=[],
         nargs="+",
         type=str,
-        help="""If category names are given, each train dir belongs to one category
+        help="""If lang names are given, each train dir belongs to one category (lang)
         (one-to-one correspondence) (eg: LANG1 LANG2)""",
     )
     parser.add_argument(
         "--soft_links",
-        default=["lid.scp", "utt2lang"],
+        default=["lid.scp", "utt2category"],
         nargs="+",
         type=str,
-        help="""Soft links from the given files to utt2category will be made
-        (eg: lid.scp and utt2lang will be linked to utt2category)""",
+        help="""Soft links from the given files to utt2lang will be made
+        (eg: lid.scp and utt2category will be linked to utt2lang). Both these are mandatory""",
     )
     parser.add_argument(
         "--prefix_text_with_categories",
