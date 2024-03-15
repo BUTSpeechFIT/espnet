@@ -74,6 +74,7 @@
     ```
 
     - Fix/sort files based on utternace IDs in both train_hi_mr and dev_hi_mr directories
+    - Additionally, you can append `utt2category` in the for-loop list at `line 57` in `utils/data/fix_data_dir.sh`
 
     ```bash
     utils/data/fix_data_dir.sh dump/fbank_pitch/train_hi_mr

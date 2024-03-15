@@ -80,6 +80,8 @@ This is inline with the Interspeech'23 paper.
 4. Create multilingual training set by reusing the above monolingual features and BPE models
 
     - Making sure that each language dir has `lid.scp` `utt2category` and `utt2lang`
+    - Additionally, you can append `utt2category` in the for-loop list at `line 57` in `utils/data/fix_data_dir.sh`
+
 
     ```bash
     for set_name in train dev; do
