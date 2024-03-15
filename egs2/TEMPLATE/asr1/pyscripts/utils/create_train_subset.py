@@ -14,8 +14,22 @@ import os
 import yaml
 import argparse
 import glob
-from pylibs.misc.io import write_simple_flist
 from shutil import copyfile
+
+
+def write_simple_flist(some_list, out_fname):
+    """Write the elements in the list line by line
+    in the given out file
+
+    Parameters:
+    -----------
+    some_list (list): list of elements
+    out_fname (str): output file name
+
+    """
+
+    with open(out_fname, "w", encoding="utf-8") as fpw:
+        fpw.write("\n".join(some_list))
 
 
 def load_keys(fname):
