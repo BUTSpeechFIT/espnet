@@ -164,7 +164,6 @@ class Speech2Text:
             vocab_size=len(token_list),
             token_list=token_list,
             pre_beam_score_key="full",
-            lid_as_prompt=self.lid_as_prompt,
         )
         # TODO(karita): make all scorers batchfied
         if batch_size == 1:
